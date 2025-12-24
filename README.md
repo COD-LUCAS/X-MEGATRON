@@ -1,11 +1,11 @@
-# 🤖 WhatsApp Bot (Baileys)
+# - WhatsApp Bot (Baileys)
 
 A minimal, **multi-session WhatsApp bot** built using **Baileys**.  
 This project is designed to be lightweight, extendable, and compatible with **Render**.
 
 ---
 
-## 🔐 Scan QR & Generate Session
+## - Scan QR & Generate Session
 
 Click the button below to scan the QR code and generate your **SESSION ID**:
 
@@ -23,7 +23,7 @@ Click the button below to scan the QR code and generate your **SESSION ID**:
 
 ---
 
-## ⚠️ Important Notice
+## - Important Notice
 
 This bot is **NOT ready to use by default**.
 
