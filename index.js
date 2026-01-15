@@ -32,7 +32,7 @@ const axios = require('axios')
 const chalk = require('chalk')
 const pino = require('pino')
 const { Boom } = require('@hapi/boom')
-const { smsg } = require('./library/serialize')
+const { smsg } = require('./library/manager')
 
 const log = {
 info: t => console.log(chalk.blueBright(t)),
@@ -144,7 +144,7 @@ mek.message = mek.message.ephemeralMessage?.message || mek.message
 if (!sock.public && !mek.key.fromMe && type === 'notify') return
 
 const m = await smsg(sock, mek)
-require('./message')(sock, m)
+require('./main')(sock, m)
 } catch {}
 })
 
