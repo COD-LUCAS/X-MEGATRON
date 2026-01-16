@@ -1,7 +1,7 @@
 {
   "name": "x-megatron",
   "version": "1.0",
-  "description": "Whatsapp Bot",
+  "description": "A Simple Whatsapp Bot",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -54,6 +54,10 @@
     "g-i-s": "^2.1.6",
     "ffmpeg-static": "^5.2.0",
     "fluent-ffmpeg": "^2.1.2",
-    "google-tts-api": "^2.0.2"
+    "google-tts-api": "^2.0.2",
+    "yt-search": "^2.12.1",
+    "yt-dlp-wrap": "^2.3.12",
+    "@distube/ytdl-core": "^4.14.4",
+    "ytsr": "^3.8.4"
   }
 }
