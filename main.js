@@ -37,25 +37,29 @@ class PluginLoader {
 
   async execute(command, sock, m, context) {
     for (const plugin of this.plugins) {
-      if (plugin.onText) {
+      try {
+        if (plugin.onText) {
+          await plugin.execute(sock, m, context)
+          continue
+        }
+
+        if (!command) continue
+
+        const cmds = Array.isArray(plugin.command)
+          ? plugin.command
+          : [plugin.command]
+
+        if (!cmds.includes(command)) continue
+
+        if (plugin.owner && !context.isOwner) return true
+        if (plugin.group && !context.isGroup) return true
+        if (plugin.admin && context.isGroup && !context.isAdmins && !context.isOwner) return true
+
         await plugin.execute(sock, m, context)
-        continue
+        return true
+      } catch (e) {
+        console.log(`Plugin execution error (${command}):`, e.message)
       }
-
-      if (!command) continue
-
-      const cmds = Array.isArray(plugin.command)
-        ? plugin.command
-        : [plugin.command]
-
-      if (!cmds.includes(command)) continue
-
-      if (plugin.owner && !context.isOwner) return true
-      if (plugin.group && !context.isGroup) return true
-      if (plugin.admin && context.isGroup && !context.isAdmins && !context.isOwner) return true
-
-      await plugin.execute(sock, m, context)
-      return true
     }
     return false
   }
@@ -67,9 +71,13 @@ module.exports = async (sock, m, chatUpdate, store) => {
   try {
     if (!jidNormalizedUser) await loadBaileysUtils()
 
-    // ========== IGNORE EMPTY MESSAGES ==========
+    // ========== BASIC CHECKS ==========
     if (!m.message) return
-    if (m.key && m.key.remoteJid === 'status@broadcast') return // Ignore status updates
+    if (m.key && m.key.remoteJid === 'status@broadcast') return
+
+    // ========== IGNORE SYSTEM MESSAGES ==========
+    if (m.message.protocolMessage) return
+    if (m.message.senderKeyDistributionMessage) return
 
     const body =
       m.mtype === 'conversation' ? m.message.conversation :
@@ -83,7 +91,7 @@ module.exports = async (sock, m, chatUpdate, store) => {
         ? JSON.parse(m.msg.nativeFlowResponseMessage.paramsJson).id
         : ''
 
-    // ========== STRICT BODY CHECK ==========
+    // ========== ONLY REJECT TRULY EMPTY MESSAGES ==========
     if (!body || body.trim() === '') return
 
     const senderJid = m.key.fromMe
@@ -105,13 +113,10 @@ module.exports = async (sock, m, chatUpdate, store) => {
     const isSudo = sudo.includes(senderNum)
     const isOwner = isCreator || isSudo
 
-    // ========== IGNORE BOT'S OWN MESSAGES ==========
-    if (m.key.fromMe && !isOwner) return
-
     const mode = (process.env.MODE || 'public').toLowerCase()
     if (mode === 'private' && !isOwner) return
 
-    // ========== FIXED QUOTED MESSAGE HANDLING ==========
+    // ========== QUOTED MESSAGE HANDLING ==========
     const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
 
     const quoted = quotedMsg ? {
@@ -167,9 +172,17 @@ module.exports = async (sock, m, chatUpdate, store) => {
     const args = isCmd ? body.trim().split(/ +/).slice(1) : []
     const text = args.join(' ')
 
-    const reply = async txt => {
-      if (!txt || txt.trim() === '') return // Prevent empty replies
-      return sock.sendMessage(m.chat, { text: txt }, { quoted: m })
+    const reply = async (txt) => {
+      if (!txt || txt.trim() === '') {
+        console.log('Blocked empty reply attempt')
+        return
+      }
+      return sock.sendMessage(m.chat, { text: String(txt).trim() }, { quoted: m })
+    }
+
+    // ========== LOG COMMAND ATTEMPTS ==========
+    if (command) {
+      console.log(`Command: ${command}, From: ${senderNum}, Group: ${m.isGroup}`);
     }
 
     await pluginLoader.execute(command, sock, m, {
@@ -194,7 +207,7 @@ module.exports = async (sock, m, chatUpdate, store) => {
     })
 
   } catch (e) {
-    console.log('Message handler error:', e)
+    console.log('Message handler error:', e.message)
   }
 }
 
