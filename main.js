@@ -9,6 +9,9 @@ const loadBaileysUtils = async () => {
   jidNormalizedUser = baileys.jidNormalizedUser
 }
 
+// Global disabled commands storage
+global.disabledCommands = global.disabledCommands || new Set()
+
 class PluginLoader {
   constructor() {
     this.plugins = []
@@ -36,6 +39,12 @@ class PluginLoader {
   }
 
   async execute(command, sock, m, context) {
+    // Check if command is disabled
+    if (command && global.disabledCommands.has(command)) {
+      await sock.sendMessage(m.chat, { react: { text: '🚫', key: m.key } });
+      return context.reply('_OWNER DISABLED THIS COMMAND_');
+    }
+
     for (const plugin of this.plugins) {
       try {
         if (plugin.onText) {
@@ -58,7 +67,7 @@ class PluginLoader {
         await plugin.execute(sock, m, context)
         return true
       } catch (e) {
-        console.log(`Plugin execution error (${command}):`, e.message)
+        console.log(`Plugin error (${command}):`, e.message)
       }
     }
     return false
@@ -71,13 +80,9 @@ module.exports = async (sock, m, chatUpdate, store) => {
   try {
     if (!jidNormalizedUser) await loadBaileysUtils()
 
-    // ========== BASIC CHECKS ==========
-    if (!m.message) return
-    if (m.key && m.key.remoteJid === 'status@broadcast') return
-
-    // ========== IGNORE SYSTEM MESSAGES ==========
-    if (m.message.protocolMessage) return
-    if (m.message.senderKeyDistributionMessage) return
+    // Quick rejections
+    if (!m.message || m.key?.remoteJid === 'status@broadcast') return
+    if (m.message.protocolMessage || m.message.senderKeyDistributionMessage) return
 
     const body =
       m.mtype === 'conversation' ? m.message.conversation :
@@ -91,34 +96,36 @@ module.exports = async (sock, m, chatUpdate, store) => {
         ? JSON.parse(m.msg.nativeFlowResponseMessage.paramsJson).id
         : ''
 
-    // ========== ONLY REJECT TRULY EMPTY MESSAGES ==========
-    if (!body || body.trim() === '') return
+    if (!body || !body.trim()) return
 
-    const senderJid = m.key.fromMe
-      ? sock.user.id
-      : m.key.participant || m.key.remoteJid
+    const prefix = process.env.PREFIX || '.'
+    const isCmd = body.startsWith(prefix)
+    
+    // Extract command early for performance
+    const command = isCmd ? body.slice(prefix.length).trim().split(/ +/)[0].toLowerCase() : null
 
+    // Quick check for disabled commands
+    if (command && global.disabledCommands.has(command)) {
+      await sock.sendMessage(m.chat, { react: { text: '🚫', key: m.key } });
+      return sock.sendMessage(m.chat, { text: '_OWNER DISABLED THIS COMMAND_' }, { quoted: m });
+    }
+
+    const senderJid = m.key.fromMe ? sock.user.id : (m.key.participant || m.key.remoteJid)
     const botJid = await sock.decodeJid(sock.user.id)
-
     const senderNorm = jidNormalizedUser(senderJid)
     const botNorm = jidNormalizedUser(botJid)
-
     const senderNum = senderNorm.split('@')[0]
 
-    const sudo = process.env.SUDO
-      ? process.env.SUDO.split(',').map(v => v.trim()).filter(Boolean)
-      : []
-
+    const sudo = process.env.SUDO?.split(',').map(v => v.trim()).filter(Boolean) || []
     const isCreator = senderNorm === botNorm
     const isSudo = sudo.includes(senderNum)
     const isOwner = isCreator || isSudo
 
+    // Optimized private mode check - reject early
     const mode = (process.env.MODE || 'public').toLowerCase()
     if (mode === 'private' && !isOwner) return
 
-    // ========== QUOTED MESSAGE HANDLING ==========
     const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage
-
     const quoted = quotedMsg ? {
       key: {
         remoteJid: m.chat,
@@ -134,55 +141,39 @@ module.exports = async (sock, m, chatUpdate, store) => {
             quotedMsg.imageMessage?.caption ||
             quotedMsg.videoMessage?.caption || '',
       download: async () => {
-        try {
-          const quotedMsgObj = {
-            key: {
-              remoteJid: m.chat,
-              id: m.message.extendedTextMessage.contextInfo.stanzaId,
-              participant: m.message.extendedTextMessage.contextInfo.participant
-            },
-            message: quotedMsg
-          }
-          return await sock.downloadMediaMessage(quotedMsgObj)
-        } catch (e) {
-          console.log('Download error:', e)
-          throw e
+        const quotedMsgObj = {
+          key: {
+            remoteJid: m.chat,
+            id: m.message.extendedTextMessage.contextInfo.stanzaId,
+            participant: m.message.extendedTextMessage.contextInfo.participant
+          },
+          message: quotedMsg
         }
+        return await sock.downloadMediaMessage(quotedMsgObj)
       }
     } : null
 
-    const mime = quoted ? (quoted.msg?.mimetype || '') : ''
+    const mime = quoted?.msg?.mimetype || ''
     const isMedia = /image|video|audio|sticker/.test(mime)
 
-    const groupMetadata = m.isGroup
-      ? await sock.groupMetadata(m.chat).catch(() => ({}))
-      : {}
+    // Lazy load group data only when needed
+    let groupMetadata = {}
+    let participants = []
+    let isAdmins = false
 
-    const participants = groupMetadata.participants || []
-    const groupAdmins = participants.filter(p => p.admin).map(p => p.id)
-    const isAdmins = m.isGroup ? groupAdmins.includes(senderNorm) : false
-
-    const prefix = process.env.PREFIX || '.'
-    const isCmd = body.startsWith(prefix)
-
-    const command = isCmd
-      ? body.slice(prefix.length).trim().split(/ +/)[0].toLowerCase()
-      : null
+    if (m.isGroup) {
+      groupMetadata = await sock.groupMetadata(m.chat).catch(() => ({}))
+      participants = groupMetadata.participants || []
+      const groupAdmins = participants.filter(p => p.admin).map(p => p.id)
+      isAdmins = groupAdmins.includes(senderNorm)
+    }
 
     const args = isCmd ? body.trim().split(/ +/).slice(1) : []
     const text = args.join(' ')
 
     const reply = async (txt) => {
-      if (!txt || txt.trim() === '') {
-        console.log('Blocked empty reply attempt')
-        return
-      }
+      if (!txt || !txt.trim()) return
       return sock.sendMessage(m.chat, { text: String(txt).trim() }, { quoted: m })
-    }
-
-    // ========== LOG COMMAND ATTEMPTS ==========
-    if (command) {
-      console.log(`Command: ${command}, From: ${senderNum}, Group: ${m.isGroup}`);
     }
 
     await pluginLoader.execute(command, sock, m, {
