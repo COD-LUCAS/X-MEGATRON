@@ -2,8 +2,12 @@ require('./library/console');
 require('dotenv').config();
 
 const config = () => require('./config');
-process.on("uncaughtException", () => {});
-process.on("unhandledRejection", () => {});
+process.on("uncaughtException", (err) => {
+  console.error('Uncaught Exception:', err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error('Unhandled Rejection:', err);
+});
 
 const fs = require('fs');
 const path = require('path');
@@ -26,24 +30,37 @@ const loadBaileys = async () => {
 const SESSION_BACKUP = './library/session.json';
 
 const initSession = async sessionDir => {
-  if (!fs.existsSync('./library')) fs.mkdirSync('./library');
+  if (!fs.existsSync('./library')) {
+    fs.mkdirSync('./library', { recursive: true });
+  }
 
   let saved = {};
   if (fs.existsSync(SESSION_BACKUP)) {
-    try { saved = JSON.parse(fs.readFileSync(SESSION_BACKUP)); } catch {}
+    try {
+      saved = JSON.parse(fs.readFileSync(SESSION_BACKUP, 'utf8'));
+    } catch (e) {
+      console.error('Failed to read session backup:', e.message);
+    }
   }
 
   const envSession = process.env.SESSION_ID;
-  if (!envSession) {
-    log.error('SESSION_ID missing in .env');
+  if (!envSession || envSession.trim().length === 0) {
+    log.error('SESSION_ID missing or empty in .env');
+    log.error('Please add SESSION_ID=your_session_id to .env file');
     process.exit(1);
   }
 
   if (saved.SESSION_ID && saved.SESSION_ID !== envSession) {
-    fs.rmSync(sessionDir, { recursive: true, force: true });
+    log.warn('Session changed, clearing old session');
+    if (fs.existsSync(sessionDir)) {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
   }
 
-  fs.mkdirSync(sessionDir, { recursive: true });
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
+
   fs.writeFileSync(
     SESSION_BACKUP,
     JSON.stringify({ SESSION_ID: envSession }, null, 2)
@@ -51,83 +68,128 @@ const initSession = async sessionDir => {
 };
 
 const clientstart = async () => {
-  await loadBaileys();
+  try {
+    await loadBaileys();
 
-  log.info('Checking dependencies');
-  log.success('Dependencies loaded');
+    log.info('Checking dependencies');
+    log.success('Dependencies loaded');
 
-  const sessionDir = `./${config().session}`;
-  const sessionFile = `${sessionDir}/creds.json`;
+    const sessionDir = `./${config().session}`;
+    const sessionFile = `${sessionDir}/creds.json`;
 
-  log.info('Initializing session');
-  await initSession(sessionDir);
+    log.info('Initializing session');
+    await initSession(sessionDir);
 
-  if (!fs.existsSync(sessionFile)) {
-    const code = process.env.SESSION_ID.split('~').pop().trim();
-    const url = `https://pastebin.com/raw/${code}`;
-    const res = await axios.get(url);
-    fs.writeFileSync(sessionFile, JSON.stringify(res.data, null, 2));
-  }
+    if (!fs.existsSync(sessionFile)) {
+      log.info('Downloading session from pastebin');
+      
+      const sessionId = process.env.SESSION_ID;
+      if (!sessionId.includes('~')) {
+        log.error('Invalid SESSION_ID format. Expected format: PREFIX~PASTEBIN_CODE');
+        process.exit(1);
+      }
 
-  log.success('Session initialized');
+      const code = sessionId.split('~').pop().trim();
+      if (!code || code.length === 0) {
+        log.error('Invalid pastebin code extracted from SESSION_ID');
+        process.exit(1);
+      }
 
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-  const { version } = await fetchLatestBaileysVersion();
+      const url = `https://pastebin.com/raw/${code}`;
+      
+      try {
+        const res = await axios.get(url, { timeout: 10000 });
+        
+        if (!res.data || typeof res.data !== 'object') {
+          log.error('Invalid session data received from pastebin');
+          process.exit(1);
+        }
 
-  log.info('Starting socket connection');
-
-  const sock = makeWASocket({
-    auth: state,
-    version,
-    logger: require('pino')({ level: 'silent' }),
-    printQRInTerminal: false,
-    browser: Browsers.macOS('Chrome'),
-    getMessage: async () => ({ conversation: '' })
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
-    if (connection === 'open') {
-      log.success('Plugins loaded');
-      const num = sock.user.id.split(':')[0];
-      log.success(`Connected as +${num}`);
-      try { require('./plugins/startup').execute(sock); } catch {}
-    }
-
-    if (connection === 'close') {
-      const code = lastDisconnect?.error?.output?.statusCode;
-      if (code !== DisconnectReason.loggedOut) {
-        log.warn('Connection closed, reconnecting in 5s');
-        setTimeout(clientstart, 5000);
-      } else {
-        log.error('Logged out, please scan/pair again');
+        fs.writeFileSync(sessionFile, JSON.stringify(res.data, null, 2));
+        log.success('Session downloaded successfully');
+      } catch (error) {
+        log.error('Failed to download session from pastebin');
+        log.error('URL:', url);
+        log.error('Error:', error.message);
+        process.exit(1);
       }
     }
-  });
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    try {
-      const mek = messages[0];
-      if (!mek?.message) return;
+    log.success('Session initialized');
 
-      mek.message = mek.message.ephemeralMessage?.message || mek.message;
-      if (!sock.public && !mek.key.fromMe && type === 'notify') return;
+    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    const { version } = await fetchLatestBaileysVersion();
 
-      const m = await require('./library/manager').smsg(sock, mek);
-      require('./main')(sock, m);
-    } catch {}
-  });
+    log.info('Starting socket connection');
 
-  sock.decodeJid = jid => {
-    if (/:\d+@/gi.test(jid)) {
-      const d = jidDecode(jid) || {};
-      return d.user && d.server ? d.user + '@' + d.server : jid;
-    }
-    return jid;
-  };
+    const sock = makeWASocket({
+      auth: state,
+      version,
+      logger: require('pino')({ level: 'silent' }),
+      printQRInTerminal: false,
+      browser: Browsers.macOS('Chrome'),
+      getMessage: async () => ({ conversation: '' })
+    });
 
-  sock.public = config().status.public;
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+      if (connection === 'open') {
+        log.success('Plugins loaded');
+        const num = sock.user.id.split(':')[0];
+        log.success(`Connected as +${num}`);
+        try {
+          if (fs.existsSync('./plugins/startup.js')) {
+            require('./plugins/startup').execute(sock);
+          }
+        } catch (e) {
+          console.error('Startup plugin error:', e.message);
+        }
+      }
+
+      if (connection === 'close') {
+        const code = lastDisconnect?.error?.output?.statusCode;
+        if (code !== DisconnectReason.loggedOut) {
+          log.warn('Connection closed, reconnecting in 5s');
+          setTimeout(clientstart, 5000);
+        } else {
+          log.error('Logged out, please get new SESSION_ID');
+          process.exit(1);
+        }
+      }
+    });
+
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      try {
+        const mek = messages[0];
+        if (!mek?.message) return;
+
+        mek.message = mek.message.ephemeralMessage?.message || mek.message;
+        
+        if (!sock.public && !mek.key.fromMe && type === 'notify') return;
+
+        const m = await require('./library/manager').smsg(sock, mek);
+        require('./main')(sock, m);
+      } catch (e) {
+        console.error('Message handler error:', e.message);
+      }
+    });
+
+    sock.decodeJid = jid => {
+      if (/:\d+@/gi.test(jid)) {
+        const d = jidDecode(jid) || {};
+        return d.user && d.server ? d.user + '@' + d.server : jid;
+      }
+      return jid;
+    };
+
+    sock.public = config().status.public;
+
+  } catch (error) {
+    log.error('Fatal error in clientstart:', error.message);
+    console.error(error);
+    process.exit(1);
+  }
 };
 
 clientstart();
