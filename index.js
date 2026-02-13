@@ -2,10 +2,11 @@ require('./library/console');
 require('dotenv').config();
 
 const config = () => require('./config');
-process.on("uncaughtException", (err) => {
+
+process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
 });
-process.on("unhandledRejection", (err) => {
+process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err);
 });
 
@@ -29,7 +30,7 @@ const loadBaileys = async () => {
 
 const SESSION_BACKUP = './library/session.json';
 
-const initSession = async sessionDir => {
+const initSession = async (sessionDir) => {
   if (!fs.existsSync('./library')) {
     fs.mkdirSync('./library', { recursive: true });
   }
@@ -46,7 +47,6 @@ const initSession = async sessionDir => {
   const envSession = process.env.SESSION_ID;
   if (!envSession || envSession.trim().length === 0) {
     log.error('SESSION_ID missing or empty in .env');
-    log.error('Please add SESSION_ID=your_session_id to .env file');
     process.exit(1);
   }
 
@@ -61,10 +61,7 @@ const initSession = async sessionDir => {
     fs.mkdirSync(sessionDir, { recursive: true });
   }
 
-  fs.writeFileSync(
-    SESSION_BACKUP,
-    JSON.stringify({ SESSION_ID: envSession }, null, 2)
-  );
+  fs.writeFileSync(SESSION_BACKUP, JSON.stringify({ SESSION_ID: envSession }, null, 2));
 };
 
 const clientstart = async () => {
@@ -82,35 +79,29 @@ const clientstart = async () => {
 
     if (!fs.existsSync(sessionFile)) {
       log.info('Downloading session from pastebin');
-      
+
       const sessionId = process.env.SESSION_ID;
       if (!sessionId.includes('~')) {
-        log.error('Invalid SESSION_ID format. Expected format: PREFIX~PASTEBIN_CODE');
+        log.error('Invalid SESSION_ID format. Expected: PREFIX~PASTEBIN_CODE');
         process.exit(1);
       }
 
       const code = sessionId.split('~').pop().trim();
-      if (!code || code.length === 0) {
-        log.error('Invalid pastebin code extracted from SESSION_ID');
+      if (!code) {
+        log.error('Invalid pastebin code in SESSION_ID');
         process.exit(1);
       }
 
-      const url = `https://pastebin.com/raw/${code}`;
-      
       try {
-        const res = await axios.get(url, { timeout: 10000 });
-        
+        const res = await axios.get(`https://pastebin.com/raw/${code}`, { timeout: 10000 });
         if (!res.data || typeof res.data !== 'object') {
-          log.error('Invalid session data received from pastebin');
+          log.error('Invalid session data from pastebin');
           process.exit(1);
         }
-
         fs.writeFileSync(sessionFile, JSON.stringify(res.data, null, 2));
         log.success('Session downloaded successfully');
       } catch (error) {
-        log.error('Failed to download session from pastebin');
-        log.error('URL:', url);
-        log.error('Error:', error.message);
+        log.error('Failed to download session:', error.message);
         process.exit(1);
       }
     }
@@ -161,32 +152,30 @@ const clientstart = async () => {
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       try {
+        if (type !== 'notify') return;
         const mek = messages[0];
         if (!mek?.message) return;
 
         mek.message = mek.message.ephemeralMessage?.message || mek.message;
-        
-        if (!sock.public && !mek.key.fromMe && type === 'notify') return;
 
-        const m = await require('./library/manager').smsg(sock, mek);
+        const { smsg } = require('./library/manager');
+        const m = await smsg(sock, mek);
         require('./main')(sock, m);
       } catch (e) {
         console.error('Message handler error:', e.message);
       }
     });
 
-    sock.decodeJid = jid => {
+    sock.decodeJid = (jid) => {
       if (/:\d+@/gi.test(jid)) {
         const d = jidDecode(jid) || {};
-        return d.user && d.server ? d.user + '@' + d.server : jid;
+        return d.user && d.server ? `${d.user}@${d.server}` : jid;
       }
       return jid;
     };
 
-    sock.public = config().status.public;
-
   } catch (error) {
-    log.error('Fatal error in clientstart:', error.message);
+    log.error('Fatal error:', error.message);
     console.error(error);
     process.exit(1);
   }
