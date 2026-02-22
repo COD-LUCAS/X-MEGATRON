@@ -78,24 +78,24 @@ const clientstart = async () => {
     await initSession(sessionDir);
 
     if (!fs.existsSync(sessionFile)) {
-      log.info('Downloading session from pastebin');
+      log.info('Downloading session from Database');
 
       const sessionId = process.env.SESSION_ID;
       if (!sessionId.includes('~')) {
-        log.error('Invalid SESSION_ID format. Expected: PREFIX~PASTEBIN_CODE');
+        log.error('Invalid SESSION_ID.');
         process.exit(1);
       }
 
       const code = sessionId.split('~').pop().trim();
       if (!code) {
-        log.error('Invalid pastebin code in SESSION_ID');
+        log.error('Invalid SESSION_ID');
         process.exit(1);
       }
 
       try {
         const res = await axios.get(`https://pastebin.com/raw/${code}`, { timeout: 10000 });
         if (!res.data || typeof res.data !== 'object') {
-          log.error('Invalid session data from pastebin');
+          log.error('Invalid session data');
           process.exit(1);
         }
         fs.writeFileSync(sessionFile, JSON.stringify(res.data, null, 2));
