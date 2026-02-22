@@ -1,82 +1,117 @@
-const fs = require('fs')
-const path = require('path')
+const fs = require('fs');
+const path = require('path');
 
-const ENV_PATH = path.join(process.cwd(), '.env')
+const SUDO_FILE = path.join(__dirname, '..', 'sudo.json');
 
-const readEnv = () => {
-  if (!fs.existsSync(ENV_PATH)) return {}
-  const data = fs.readFileSync(ENV_PATH, 'utf8')
-  const env = {}
-  for (const line of data.split(/\r?\n/)) {
-    if (!line || line.startsWith('#') || !line.includes('=')) continue
-    const [k, ...v] = line.split('=')
-    env[k.trim()] = v.join('=').trim()
-  }
-  return env
-}
+const extractDigits = (val) => val.replace(/[^0-9]/g, '');
 
-const writeEnv = env => {
-  const out = Object.entries(env)
-    .map(([k, v]) => `${k}=${v}`)
-    .join('\n')
-  fs.writeFileSync(ENV_PATH, out + '\n')
-}
+const normalizeJid = (input) => {
+  if (!input) return '';
+  const digits = extractDigits(input);
+  if (!digits) return '';
+  if (input.includes('@lid')) return digits + '@lid';
+  if (input.includes('@s.whatsapp.net')) return digits + '@s.whatsapp.net';
+  return digits + '@s.whatsapp.net';
+};
 
-const normalize = v => v.replace(/\D/g, '').slice(-10)
+const readSudo = () => {
+  try {
+    if (fs.existsSync(SUDO_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(SUDO_FILE, 'utf8'));
+      return Array.isArray(raw) ? raw : [];
+    }
+  } catch (e) {}
+  return [];
+};
 
-const extractTarget = (m, args) => {
-  const mention = m.message?.extendedTextMessage?.contextInfo?.mentionedJid
-  if (mention?.length) return mention[0].split('@')[0]
-  if (args[0]) return args[0]
-  return null
-}
+const writeSudo = (list) => {
+  fs.writeFileSync(SUDO_FILE, JSON.stringify(list, null, 2));
+};
+
+const jidMatchesSuffix = (a, b) => {
+  const da = extractDigits(a);
+  const db = extractDigits(b);
+  if (!da || !db) return false;
+  if (da === db) return true;
+  if (da.length >= 7 && db.length >= 7) return da.slice(-10) === db.slice(-10);
+  return false;
+};
 
 module.exports = {
-  command: ['setsudo', 'listsudo', 'delsudo'],
-  category: 'owner',
-  desc: 'Manage sudo users',
+  command: ['setsudo', 'delsudo', 'listsudo'],
   owner: true,
 
-  async execute(sock, m, { command, args, reply, isCreator }) {
-    if (!isCreator) return
+  async execute(sock, m, context) {
+    const { command, args, prefix, sender } = context;
 
-    const env = readEnv()
-    let sudoList = (env.SUDO || '')
-      .split(',')
-      .map(v => v.trim())
-      .filter(Boolean)
-
-    /* ───── LISTSUDO ───── */
-    if (command === 'listsudo') {
-      if (!sudoList.length) return reply('_no sudo users set_')
-      return reply(
-        '*Sudo Users*\n\n' +
-        sudoList.map((v, i) => `${i + 1}. ${v}`).join('\n')
-      )
-    }
-
-    const targetRaw = extractTarget(m, args)
-    if (!targetRaw) return
-
-    const target = normalize(targetRaw)
-    sudoList = sudoList.map(normalize)
-
-    /* ───── SETSUDO ───── */
     if (command === 'setsudo') {
-      if (sudoList.includes(target)) return
-      sudoList.push(target)
-      env.SUDO = sudoList.join(',')
-      writeEnv(env)
-      return reply('_sudo added (restart bot to apply)_')
+      let target = m.quoted?.sender || m.mentionedJid?.[0] || (args[0] ? normalizeJid(args[0]) : null);
+
+      if (!target || !extractDigits(target)) {
+        return m.reply(
+          `Mention or provide a number!\nExample:\n${prefix}setsudo @tag\n${prefix}setsudo 62xxx`
+        );
+      }
+
+      target = normalizeJid(target);
+
+      if (jidMatchesSuffix(target, sock.user?.id || '')) {
+        return m.reply('_❌ Cannot add the bot itself as sudo_');
+      }
+
+      if (jidMatchesSuffix(target, sender)) {
+        return m.reply('_❌ You are already the creator, no need to add yourself_');
+      }
+
+      const list = readSudo();
+
+      if (list.some((e) => jidMatchesSuffix(e, target))) {
+        return m.reply(`_❌ @${extractDigits(target)} is already in the sudo list_`);
+      }
+
+      list.push(target);
+      writeSudo(list);
+
+      return m.reply(`_Successfully added @${extractDigits(target)} as sudo_`);
     }
 
-    /* ───── DELSUDO ───── */
     if (command === 'delsudo') {
-      if (!sudoList.includes(target)) return
-      sudoList = sudoList.filter(v => v !== target)
-      env.SUDO = sudoList.join(',')
-      writeEnv(env)
-      return reply('_sudo removed (restart bot to apply)_')
+      let target = m.quoted?.sender || m.mentionedJid?.[0] || (args[0] ? normalizeJid(args[0]) : null);
+
+      if (!target || !extractDigits(target)) {
+        return m.reply(
+          `Mention or provide a number!\nExample:\n${prefix}delsudo @tag\n${prefix}delsudo 91xxxxxxxxxx`
+        );
+      }
+
+      target = normalizeJid(target);
+
+      const list = readSudo();
+      const index = list.findIndex((e) => jidMatchesSuffix(e, target));
+
+      if (index === -1) {
+        return m.reply(`_❌ @${extractDigits(target)} is not in the sudo list_`);
+      }
+
+      list.splice(index, 1);
+      writeSudo(list);
+
+      return m.reply(`_Successfully removed @${extractDigits(target)} from sudo_`);
     }
-  }
-}
+
+    if (command === 'listsudo') {
+      const list = readSudo();
+
+      if (!list.length) {
+        return m.reply('_Sudo list is empty_');
+      }
+
+      let txt = '*------「 LIST SUDO 」------*\n\n';
+      list.forEach((jid, i) => {
+        txt += `${i + 1}. @${extractDigits(jid)}\n`;
+      });
+
+      return m.reply(txt);
+    }
+  },
+};
