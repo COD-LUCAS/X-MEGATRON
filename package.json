@@ -51,7 +51,9 @@
     "wa-sticker-formatter": "^4.4.4",
     "yt-dlp-wrap": "^2.3.12",
     "yt-search": "^2.12.1",
-    "ytsr": "^3.8.4"
+    "ytsr": "^3.8.4",
+    "simple-git": "^3.22.0",
+    "unzipper": "^0.10.14"
   },
   "devDependencies": {},
   "repository": {
