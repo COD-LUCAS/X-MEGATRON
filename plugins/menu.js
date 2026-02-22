@@ -54,7 +54,7 @@ module.exports = {
 
       let version = "unknown";
       try {
-        const v = require("../../version.json");
+        const v = require("../version.json");
         version = v.version || version;
       } catch {}
 
