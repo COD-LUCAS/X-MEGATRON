@@ -7,7 +7,6 @@ const path = require('path');
 const processedMessages = new Set();
 
 global.disabledCommands = global.disabledCommands || new Set();
-
 const DISABLED_COMMANDS_FILE = path.join(__dirname, 'disabled_commands.json');
 
 const loadDisabledCommands = () => {
@@ -21,7 +20,10 @@ const loadDisabledCommands = () => {
 
 global.saveDisabledCommands = () => {
   try {
-    fs.writeFileSync(DISABLED_COMMANDS_FILE, JSON.stringify(Array.from(global.disabledCommands), null, 2));
+    fs.writeFileSync(
+      DISABLED_COMMANDS_FILE,
+      JSON.stringify(Array.from(global.disabledCommands), null, 2)
+    );
   } catch (e) {}
 };
 
@@ -32,27 +34,97 @@ const extractDigits = (jid) => {
   return jid.split('@')[0].replace(/\D/g, '');
 };
 
+const normalizeJid = (input) => {
+  if (!input) return '';
+  const digits = extractDigits(input);
+  if (!digits) return '';
+  if (input.includes('@lid')) return digits + '@lid';
+  if (input.includes('@s.whatsapp.net')) return digits + '@s.whatsapp.net';
+  return digits + '@s.whatsapp.net';
+};
+
+const jidMatchesSuffix = (a, b) => {
+  const da = extractDigits(a);
+  const db = extractDigits(b);
+  if (!da || !db) return false;
+  if (da === db) return true;
+  if (da.length >= 7 && db.length >= 7) return da.slice(-10) === db.slice(-10);
+  return false;
+};
+
+const loadOwnerList = () => {
+  const ownerFile = path.join(__dirname, 'owner.json');
+  try {
+    if (fs.existsSync(ownerFile)) {
+      const raw = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+      return Array.isArray(raw) ? raw.map(normalizeJid) : [];
+    }
+  } catch (e) {}
+  return [];
+};
+
+const loadSudoList = () => {
+  const fromEnv = (process.env.SUDO || '')
+    .split(',')
+    .map((v) => normalizeJid(v.trim()))
+    .filter(Boolean);
+
+  let fromFile = [];
+  try {
+    const sudoFile = path.join(__dirname, 'sudo.json');
+    if (fs.existsSync(sudoFile)) {
+      const raw = JSON.parse(fs.readFileSync(sudoFile, 'utf8'));
+      fromFile = Array.isArray(raw) ? raw.map(normalizeJid) : [];
+    }
+  } catch (e) {}
+
+  return [...new Set([...fromEnv, ...fromFile])];
+};
+
+const checkIsOwner = (senderJid, ownerList) => {
+  if (!senderJid || !ownerList.length) return false;
+  return ownerList.some((entry) => jidMatchesSuffix(senderJid, entry));
+};
+
 const checkIsSudo = (senderJid, sudoList) => {
   if (!senderJid || !sudoList.length) return false;
-  const senderDigits = extractDigits(senderJid);
-  if (!senderDigits) return false;
-  return sudoList.some(entry => {
-    const entryDigits = extractDigits(entry);
-    if (!entryDigits) return false;
-    if (senderDigits === entryDigits) return true;
-    if (senderDigits.length >= 7 && entryDigits.length >= 7) {
-      return senderDigits.slice(-10) === entryDigits.slice(-10);
-    }
-    return false;
-  });
+  return sudoList.some((entry) => jidMatchesSuffix(senderJid, entry));
 };
 
 const checkIsCreator = (senderJid, botJid) => {
   if (!senderJid || !botJid) return false;
-  const senderDigits = extractDigits(senderJid);
-  const botDigits = extractDigits(botJid);
-  if (!senderDigits || !botDigits) return false;
-  return senderDigits.slice(-10) === botDigits.slice(-10);
+  return jidMatchesSuffix(senderJid, botJid);
+};
+
+const SPECIAL_PREFIX_RE = /^[°•π÷×¶∆£¢€¥®™+✓_=|~!?@()#,'"*+÷/\%^&.©^]/gi;
+const EMOJI_PREFIX_RE = /^[\uD800-\uDBFF][\uDC00-\uDFFF]/gi;
+
+const getListPrefix = () => {
+  const raw = process.env.LIST_PREFIX || process.env.PREFIX || '.';
+  return raw.split(',').map((v) => v.trim()).filter(Boolean);
+};
+
+const detectPrefix = (body, multiprefix) => {
+  if (!body) return null;
+
+  const listPrefix = getListPrefix();
+
+  if (multiprefix) {
+    if (SPECIAL_PREFIX_RE.test(body)) {
+      const match = body.match(SPECIAL_PREFIX_RE);
+      return match ? match[0] : null;
+    }
+    if (EMOJI_PREFIX_RE.test(body)) {
+      const match = body.match(EMOJI_PREFIX_RE);
+      return match ? match[0] : null;
+    }
+  }
+
+  for (const prefix of listPrefix) {
+    if (body.startsWith(prefix)) return prefix;
+  }
+
+  return null;
 };
 
 class PluginLoader {
@@ -74,7 +146,7 @@ class PluginLoader {
           this.plugins.push(plugin);
         }
       } catch (e) {
-        console.log(`Failed to load plugin ${file}:`, e.message);
+        console.log(`[PluginLoader] Failed to load ${file}:`, e.message);
       }
     }
   }
@@ -94,11 +166,27 @@ class PluginLoader {
         await m.reply('_❌ This command is for the owner only_');
         return;
       }
+      if (plugin.sudo === true && !context.isOwner && !context.isSudo) {
+        await m.reply('_❌ This command is for sudo/owner only_');
+        return;
+      }
+      if (plugin.admin === true && !context.isAdmins && !context.isOwner) {
+        await m.reply('_❌ This command is for group admins only_');
+        return;
+      }
+      if (plugin.group === true && !context.isGroup) {
+        await m.reply('_❌ This command can only be used in groups_');
+        return;
+      }
+      if (plugin.private === true && context.isGroup) {
+        await m.reply('_❌ This command can only be used in private chat_');
+        return;
+      }
 
       try {
         await plugin.execute(sock, m, context);
       } catch (e) {
-        console.log(`Plugin error (${command}):`, e.message);
+        console.error(`[Plugin error] (${command}):`, e.message);
       }
       return;
     }
@@ -139,60 +227,113 @@ module.exports = async (sock, m) => {
     if (processedMessages.size > 200) {
       const arr = Array.from(processedMessages);
       processedMessages.clear();
-      arr.slice(-100).forEach(id => processedMessages.add(id));
+      arr.slice(-100).forEach((id) => processedMessages.add(id));
     }
 
     await pluginLoader.executeAutoReveal(sock, m);
 
-    // smsg() already set: m.chat, m.isGroup, m.mtype, m.body, m.sender, m.fromMe, m.quoted, m.reply
-    const body = m.body || m.text || '';
-    const senderJid = m.sender || '';
+    const body =
+      m.body ||
+      m.text ||
+      m.message?.conversation ||
+      m.message?.imageMessage?.caption ||
+      m.message?.videoMessage?.caption ||
+      m.message?.extendedTextMessage?.text ||
+      m.message?.buttonsResponseMessage?.selectedButtonId ||
+      m.message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
+      m.message?.templateButtonReplyMessage?.selectedId ||
+      (m.message?.interactiveResponseMessage?.nativeFlowResponseMessage
+        ? (() => {
+            try {
+              return JSON.parse(
+                m.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson
+              ).id;
+            } catch {
+              return '';
+            }
+          })()
+        : '') ||
+      m.message?.editedMessage?.message?.protocolMessage?.editedMessage?.extendedTextMessage?.text ||
+      m.message?.editedMessage?.message?.protocolMessage?.editedMessage?.conversation ||
+      '';
+
+    const senderJid = m.sender || m.key?.participant || m.key?.remoteJid || '';
     const botJid = sock.user?.id || '';
 
-    const sudoFromEnv = (process.env.SUDO || '').split(',').map(v => v.trim()).filter(Boolean);
-    const sudoFile = path.join(__dirname, 'sudo.json');
-    let sudoFromFile = [];
-    try {
-      if (fs.existsSync(sudoFile)) sudoFromFile = JSON.parse(fs.readFileSync(sudoFile, 'utf8'));
-    } catch (e) {}
-    const sudoList = [...new Set([...sudoFromEnv, ...sudoFromFile])];
+    const ownerListFile = loadOwnerList();
+    const sudoList = loadSudoList();
+    const ownerFromEnv = (process.env.OWNER || '')
+      .split(',')
+      .map((v) => normalizeJid(v.trim()))
+      .filter(Boolean);
+
+    const fullOwnerList = [botJid, ...ownerFromEnv, ...ownerListFile];
+
     const isCreator = m.fromMe || checkIsCreator(senderJid, botJid);
-    const isSudo = !isCreator && checkIsSudo(senderJid, sudoList);
-    const isOwner = isCreator || isSudo;
+    const isOwnerFromList = checkIsOwner(senderJid, fullOwnerList);
+    const isSudo = !isCreator && !isOwnerFromList && checkIsSudo(senderJid, sudoList);
+    const isOwner = isCreator || isOwnerFromList || isSudo;
 
     const mode = (process.env.MODE || 'public').toLowerCase();
+
     if (mode === 'private' && !isOwner) return;
+    if (mode === 'group' && !m.isGroup && !isOwner) return;
+    if (mode === 'pm' && m.isGroup && !isOwner) return;
+
+    if (m.isBot && !m.fromMe) return;
 
     let groupMetadata = null;
     let participants = [];
     let isAdmins = false;
+    let isBotAdmin = false;
 
     const getGroupMetadata = async () => {
       if (!m.isGroup || groupMetadata) return;
       try {
-        groupMetadata = await sock.groupMetadata(m.chat);
+        groupMetadata = await sock.groupMetadata(m.chat || m.key.remoteJid);
         participants = groupMetadata.participants || [];
-        const admins = participants.filter(p => p.admin).map(p => p.id);
-        isAdmins = admins.some(id => extractDigits(id).slice(-10) === extractDigits(senderJid).slice(-10));
+        const admins = participants.filter((p) => p.admin).map((p) => p.id);
+        isAdmins = admins.some((id) => jidMatchesSuffix(id, senderJid));
+        isBotAdmin = admins.some((id) => jidMatchesSuffix(id, botJid));
       } catch (e) {}
     };
+
+    if (m.isGroup) await getGroupMetadata();
+
+    const multiprefix = (process.env.MULTI_PREFIX || 'false').toLowerCase() === 'true';
 
     const context = {
       command: null,
       args: [],
       text: body,
+
       isOwner,
       isSudo,
       isCreator,
       isAdmins,
+      isBotAdmin,
+
       isGroup: m.isGroup,
       sender: senderJid,
       senderNum: extractDigits(senderJid),
-      prefix: process.env.PREFIX || '.',
-      reply: (txt) => m.reply(txt),
-      get participants() { return participants; },
-      get groupMetadata() { return groupMetadata; },
+      chat: m.chat || m.key?.remoteJid,
+
+      get prefix() {
+        return detectPrefix(body, multiprefix) || getListPrefix()[0] || '.';
+      },
+
+      get participants() {
+        return participants;
+      },
+      get groupMetadata() {
+        return groupMetadata;
+      },
       getGroupMetadata,
+
+      reply: (txt) => m.reply(txt),
+
+      ownerNumbers: fullOwnerList.map(extractDigits),
+
       config,
     };
 
@@ -200,10 +341,10 @@ module.exports = async (sock, m) => {
 
     if (!body) return;
 
-    const prefix = process.env.PREFIX || '.';
-    if (!body.startsWith(prefix)) return;
+    const detectedPrefix = detectPrefix(body, multiprefix);
+    if (!detectedPrefix) return;
 
-    const parts = body.slice(prefix.length).trim().split(/\s+/);
+    const parts = body.slice(detectedPrefix.length).trim().split(/\s+/);
     const command = parts[0]?.toLowerCase();
     if (!command) return;
 
@@ -212,15 +353,9 @@ module.exports = async (sock, m) => {
     context.args = args;
     context.text = args.join(' ');
 
-    if (m.isGroup) {
-      await getGroupMetadata();
-      context.isAdmins = isAdmins;
-    }
-
     await pluginLoader.executeCommand(command, sock, m, context);
-
   } catch (e) {
-    console.error('Handler error:', e.message);
+    console.error('[Handler error]', e.message);
   }
 };
 
