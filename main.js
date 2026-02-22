@@ -8,6 +8,7 @@ const processedMessages = new Set();
 
 global.disabledCommands = global.disabledCommands || new Set();
 const DISABLED_COMMANDS_FILE = path.join(__dirname, 'disabled_commands.json');
+const BOND_FILE = path.join(__dirname, 'sticker_bonds.json');
 
 const loadDisabledCommands = () => {
   try {
@@ -28,6 +29,15 @@ global.saveDisabledCommands = () => {
 };
 
 loadDisabledCommands();
+
+const readBonds = () => {
+  try {
+    if (fs.existsSync(BOND_FILE)) {
+      return JSON.parse(fs.readFileSync(BOND_FILE, 'utf8'));
+    }
+  } catch (e) {}
+  return {};
+};
 
 const extractDigits = (jid) => {
   if (!jid) return '';
@@ -338,6 +348,39 @@ module.exports = async (sock, m) => {
     };
 
     pluginLoader.executeOnText(sock, m, context).catch(() => {});
+
+    if (m.message?.stickerMessage) {
+      let stickerHash = null;
+
+      if (m.message.stickerMessage.fileSha256) {
+        stickerHash = m.message.stickerMessage.fileSha256.toString('base64');
+      } else if (m.msg?.fileSha256) {
+        stickerHash = m.msg.fileSha256.toString('base64');
+      }
+
+      if (stickerHash) {
+        const bonds = readBonds();
+
+        if (bonds[stickerHash]) {
+          const boundCommand = bonds[stickerHash];
+          const parts = boundCommand.trim().split(/\s+/);
+          const command = parts[0]?.toLowerCase();
+          const args = parts.slice(1);
+
+          if (m.message.stickerMessage.contextInfo?.quotedMessage) {
+            if (!m.quoted) m.quoted = {};
+            m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
+          }
+
+          context.command = command;
+          context.args = args;
+          context.text = args.join(' ');
+
+          await pluginLoader.executeCommand(command, sock, m, context);
+          return;
+        }
+      }
+    }
 
     if (!body) return;
 
