@@ -1,43 +1,44 @@
-const { exec } = require('child_process')
+const fs = require('fs');
+const path = require('path');
 
 module.exports = {
-  command: ["reload", "reboot", "restart"],
-  category: "owner",
-  desc: "System management commands",
-  usage: ".reload | .reboot | .restart",
-  group: false,
-  admin: false,
-  owner: false,
+  command: ['reboot', 'reload'],
+  owner: true,
+  sudo: true,
 
   async execute(sock, m, context) {
-    const { reply, command, isOwner, isSudo } = context
+    const { command, isOwner, isSudo } = context;
 
-    // 🔒 Allow only owner or sudo
-    if (!isOwner && !isSudo) return
+    if (!isOwner && !isSudo) return;
 
-    if (command === "reload") {
-      await reply("_reloading plugins..._")
+    if (command === 'reboot') {
+      await m.reply('_🔄 Rebooting bot, please wait..._');
+      setTimeout(() => process.exit(0), 1000);
+      return;
+    }
 
-      try {
-        Object.keys(require.cache).forEach(f => {
-          if (!f.includes("node_modules")) {
-            delete require.cache[f]
-          }
-        })
+    if (command === 'reload') {
+      const pluginDir = path.join(__dirname);
+      const files = fs.readdirSync(pluginDir).filter(f => f.endsWith('.js'));
 
-        return reply("_reload completed_")
-      } catch (e) {
-        return reply(`_reload failed: ${e.message}_`)
+      let success = 0;
+      let failed = [];
+
+      for (const file of files) {
+        const filePath = path.join(pluginDir, file);
+        try {
+          delete require.cache[require.resolve(filePath)];
+          require(filePath);
+          success++;
+        } catch {
+          failed.push(file);
+        }
       }
-    }
 
-    if (command === "reboot" || command === "restart") {
-      await reply("_restarting bot..._")
+      let txt = `_✅ Reloaded ${success}/${files.length} plugin(s)_`;
+      if (failed.length) txt += `\n_❌ Failed: ${failed.join(', ')}_`;
 
-      setTimeout(() => {
-        exec('npm start', () => {})
-        process.exit(0)
-      }, 1000)
+      return m.reply(txt);
     }
-  }
-}
+  },
+};
