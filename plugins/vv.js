@@ -1,167 +1,67 @@
+const { downloadContentFromMessage } = require("@whiskeysockets/baileys")
+
+const extractTarget = (text) => {
+  if (!text) return null
+  const t = text.trim()
+  if (!t) return null
+  if (t.includes("@")) return t
+  return null
+}
+
 module.exports = {
-  command: ["mp3", "photo", "vv"],
-  category: "converter",
-  description: "Convert media: mp3, photo, viewonce",
+  command: ["vv2"],
+  category: "owner",
+  desc: "Reveal view once media (optionally send to jid/lid)",
+  usage: ".vv (reply) | .vv @jid/@lid (reply)",
+  owner: true,
+  sudo: true,
 
-  async execute(sock, m, { reply, quoted, text, command }) {
-    
-    // ============ MP3 CONVERTER ============
-    if (command === "mp3") {
-      
-      if (!quoted) {
-        return reply('_❌ Reply to a video or audio message_');
+  async execute(sock, m, context) {
+
+    if (!context.isOwner && !context.isSudo) return
+    if (!m.quoted) return context.reply("_Reply to media_")
+
+    const target = extractTarget(context.text) || m.chat
+
+    let q =
+      m.quoted.message ||
+      m.message?.extendedTextMessage?.contextInfo?.quotedMessage ||
+      {}
+
+    const wrap = ["viewOnceMessage", "viewOnceMessageV2", "viewOnceMessageV2Extension"]
+      .find(k => q[k])
+
+    if (wrap) q = q[wrap].message
+
+    const media =
+      q.imageMessage ? "imageMessage" :
+      q.videoMessage ? "videoMessage" :
+      q.audioMessage ? "audioMessage" :
+      null
+
+    if (!media) return context.reply("_Unsupported media_")
+
+    try {
+      const msg = q[media]
+      const stream = await downloadContentFromMessage(msg, media.replace("Message", ""))
+      let buffer = Buffer.from([])
+
+      for await (const chunk of stream) {
+        buffer = Buffer.concat([buffer, chunk])
       }
 
-      const mtype = quoted.mtype;
-      
-      if (mtype !== 'videoMessage' && mtype !== 'audioMessage') {
-        return reply('_❌ Reply to a video or audio message_');
-      }
+      if (media === "imageMessage")
+        return sock.sendMessage(target, { image: buffer }, { quoted: m })
 
-      await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } });
+      if (media === "videoMessage")
+        return sock.sendMessage(target, { video: buffer }, { quoted: m })
 
-      try {
-        const buffer = await quoted.download();
-        const filename = (text && text.trim()) ? text.trim().replace(/[^a-zA-Z0-9_-]/g, '_') : 'audio';
+      if (media === "audioMessage")
+        return sock.sendMessage(target, { audio: buffer, mimetype: "audio/mpeg" }, { quoted: m })
 
-        await sock.sendMessage(m.chat, {
-          audio: buffer,
-          mimetype: 'audio/mpeg',
-          fileName: `${filename}.mp3`,
-          ptt: false
-        }, { quoted: m });
-
-        await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
-        
-      } catch (error) {
-        await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
-        return reply('_❌ Conversion failed_');
-      }
-      
-      return;
-    }
-
-    // ============ PHOTO CONVERTER ============
-    if (command === "photo") {
-      
-      if (!quoted) {
-        return reply('_❌ Reply to a sticker_');
-      }
-
-      const mtype = quoted.mtype;
-      
-      if (mtype !== 'stickerMessage') {
-        return reply('_❌ Reply to a sticker message_');
-      }
-
-      await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } });
-
-      try {
-        const buffer = await quoted.download();
-
-        await sock.sendMessage(m.chat, {
-          image: buffer,
-          caption: '_✅ Sticker converted to photo_'
-        }, { quoted: m });
-
-        await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
-        
-      } catch (error) {
-        await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
-        return reply('_❌ Conversion failed_');
-      }
-      
-      return;
-    }
-
-    // ============ VIEW ONCE REVEALER ============
-    if (command === "vv") {
-      
-      if (!quoted) {
-        return reply('_❌ Reply to a view once message_');
-      }
-
-      const msg = quoted.message;
-      const mtype = quoted.mtype;
-      
-      // Check if it's marked as view once
-      if (!quoted.isViewOnce) {
-        return reply('_❌ This is not a view once message_\n\n_Reply to an unopened view once photo or video_');
-      }
-
-      await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } });
-
-      try {
-        const buffer = await quoted.download();
-
-        // Check for view once message structure
-        let viewOnceContent = null;
-        
-        if (msg.viewOnceMessageV2?.message) {
-          viewOnceContent = msg.viewOnceMessageV2.message;
-        } else if (msg.viewOnceMessage?.message) {
-          viewOnceContent = msg.viewOnceMessage.message;
-        }
-
-        // If we have view once structure, use it
-        if (viewOnceContent) {
-          if (viewOnceContent.imageMessage) {
-            const caption = viewOnceContent.imageMessage.caption || '';
-            await sock.sendMessage(m.chat, {
-              image: buffer,
-              caption: `_🔓 View Once Revealed_${caption ? '\n\n' + caption : ''}`
-            }, { quoted: m });
-          } 
-          else if (viewOnceContent.videoMessage) {
-            const caption = viewOnceContent.videoMessage.caption || '';
-            await sock.sendMessage(m.chat, {
-              video: buffer,
-              caption: `_🔓 View Once Revealed_${caption ? '\n\n' + caption : ''}`
-            }, { quoted: m });
-          }
-          else if (viewOnceContent.audioMessage) {
-            await sock.sendMessage(m.chat, {
-              audio: buffer,
-              mimetype: 'audio/mpeg'
-            }, { quoted: m });
-          }
-        }
-        // Fallback: use mtype (for already viewed messages)
-        else {
-          const caption = quoted.msg?.caption || '';
-          
-          if (mtype === 'imageMessage') {
-            await sock.sendMessage(m.chat, {
-              image: buffer,
-              caption: `_🔓 View Once Revealed_${caption ? '\n\n' + caption : ''}`
-            }, { quoted: m });
-          } 
-          else if (mtype === 'videoMessage') {
-            await sock.sendMessage(m.chat, {
-              video: buffer,
-              caption: `_🔓 View Once Revealed_${caption ? '\n\n' + caption : ''}`
-            }, { quoted: m });
-          }
-          else if (mtype === 'audioMessage') {
-            await sock.sendMessage(m.chat, {
-              audio: buffer,
-              mimetype: 'audio/mpeg'
-            }, { quoted: m });
-          }
-          else {
-            return reply('_❌ Unsupported media type_');
-          }
-        }
-
-        await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
-        
-      } catch (error) {
-        console.error('VV error:', error);
-        await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
-        return reply('_❌ Failed to reveal_');
-      }
-      
-      return;
+    } catch (e) {
+      console.log("VV ERROR:", e)
+      return context.reply("_Failed_")
     }
   }
-};
+}
