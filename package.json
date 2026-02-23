@@ -1,6 +1,6 @@
 {
   "name": "x-megatron",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "description": "A Simple WhatsApp Bot",
   "main": "index.js",
   "type": "commonjs",
