@@ -1,109 +1,282 @@
-const axios = require("axios")
-const fs = require("fs")
-const path = require("path")
-const unzipper = require("unzipper")
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const { exec } = require('child_process');
+const { promisify } = require('util');
 
-const VERSION_URL = "https://raw.githubusercontent.com/COD-LUCAS/X-MEGATRON/main/version.json"
-const ZIP_URL = "https://github.com/COD-LUCAS/X-MEGATRON/archive/refs/heads/main.zip"
+const execAsync = promisify(exec);
 
-const ROOT = process.cwd()
-const LOCAL_VERSION_FILE = path.join(ROOT, "version.json")
-const TEMP_ZIP = path.join(ROOT, "update.zip")
-const TEMP_DIR = path.join(ROOT, "__update__")
+const GITHUB_REPO = 'COD-LUCAS/X-MEGATRON';
+const GITHUB_ZIP = 'https://github.com/COD-LUCAS/X-MEGATRON/archive/refs/heads/main.zip';
+const VERSION_URL = 'https://raw.githubusercontent.com/COD-LUCAS/X-MEGATRON/main/version.json';
+const RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 
-const PROTECTED = [
-  ".env",
-  "node_modules",
-  "session",
-  "sticker_bonds.json",
-  "disabled_commands.json",
-  "__update__",
-  "update.zip"
-]
+const LOCAL_VERSION_FILE = path.join(__dirname, '..', 'version.json');
+const UPDATE_CHECK_FILE = path.join(__dirname, '..', '.last_update_check');
 
-const readJSON = (p) => JSON.parse(fs.readFileSync(p, "utf8"))
+const PRESERVE_FILES = [
+  '.env',
+  'disabled_commands.json',
+  'sticker_bonds.json',
+  'sudo.json',
+  'owner.json',
+  'config.js',
+  'session',
+  'database'
+];
 
-const safeCopy = (src, dest) => {
-  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true })
+const httpsGet = (url) => {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'X-MEGATRON-Bot' } }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          resolve(data);
+        } else {
+          reject(new Error(`HTTP ${res.statusCode}`));
+        }
+      });
+    }).on('error', reject);
+  });
+};
 
-  for (const item of fs.readdirSync(src)) {
-    if (PROTECTED.includes(item)) continue
-
-    const s = path.join(src, item)
-    const d = path.join(dest, item)
-
-    if (fs.statSync(s).isDirectory()) {
-      safeCopy(s, d)
-    } else {
-      fs.copyFileSync(s, d)
+const getLocalVersion = () => {
+  try {
+    if (fs.existsSync(LOCAL_VERSION_FILE)) {
+      return JSON.parse(fs.readFileSync(LOCAL_VERSION_FILE, 'utf8'));
     }
+  } catch (e) {}
+  return { version: '0.0.0', features: [] };
+};
+
+const getRemoteVersion = async () => {
+  try {
+    const data = await httpsGet(VERSION_URL);
+    return JSON.parse(data);
+  } catch (e) {
+    throw new Error('Failed to fetch remote version');
   }
-}
+};
 
-const safeRemoveOld = (current, fresh) => {
-  for (const item of fs.readdirSync(current)) {
-    if (PROTECTED.includes(item)) continue
+const getLatestRelease = async () => {
+  try {
+    const data = await httpsGet(RELEASES_API);
+    const release = JSON.parse(data);
+    return {
+      version: release.tag_name.replace(/^v/, ''),
+      name: release.name,
+      body: release.body,
+      url: release.html_url
+    };
+  } catch (e) {
+    return null;
+  }
+};
 
-    const currentPath = path.join(current, item)
-    const freshPath = path.join(fresh, item)
+const compareVersions = (v1, v2) => {
+  const parts1 = v1.split('.').map(Number);
+  const parts2 = v2.split('.').map(Number);
+  
+  for (let i = 0; i < 3; i++) {
+    if (parts1[i] > parts2[i]) return 1;
+    if (parts1[i] < parts2[i]) return -1;
+  }
+  return 0;
+};
 
-    if (!fs.existsSync(freshPath)) {
-      fs.rmSync(currentPath, { recursive: true, force: true })
+const performUpdate = async () => {
+  const tmpDir = path.join(__dirname, '..', '.tmp_update');
+  const rootDir = path.join(__dirname, '..');
+
+  try {
+    if (fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    await execAsync(`cd "${tmpDir}" && curl -L "${GITHUB_ZIP}" -o update.zip`);
+    await execAsync(`cd "${tmpDir}" && unzip -q update.zip`);
+
+    const extractedDir = path.join(tmpDir, 'X-MEGATRON-main');
+    
+    if (!fs.existsSync(extractedDir)) {
+      throw new Error('Failed to extract update');
+    }
+
+    const backupFiles = {};
+    for (const file of PRESERVE_FILES) {
+      const filePath = path.join(rootDir, file);
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath);
+        if (stat.isDirectory()) {
+          backupFiles[file] = { type: 'dir', path: filePath + '_backup' };
+          fs.renameSync(filePath, filePath + '_backup');
+        } else {
+          backupFiles[file] = { type: 'file', content: fs.readFileSync(filePath) };
+        }
+      }
+    }
+
+    const entries = fs.readdirSync(extractedDir);
+    for (const entry of entries) {
+      if (PRESERVE_FILES.includes(entry)) continue;
+      
+      const src = path.join(extractedDir, entry);
+      const dest = path.join(rootDir, entry);
+      
+      if (fs.existsSync(dest)) {
+        fs.rmSync(dest, { recursive: true, force: true });
+      }
+      
+      fs.renameSync(src, dest);
+    }
+
+    for (const [file, backup] of Object.entries(backupFiles)) {
+      const filePath = path.join(rootDir, file);
+      if (backup.type === 'dir') {
+        if (fs.existsSync(backup.path)) {
+          fs.renameSync(backup.path, filePath);
+        }
+      } else {
+        fs.writeFileSync(filePath, backup.content);
+      }
+    }
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    return true;
+  } catch (e) {
+    if (fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+    throw e;
   }
-}
+};
+
+let updateNotificationSent = false;
+
+const checkForUpdates = async (sock, notifyJid = null) => {
+  try {
+    const local = getLocalVersion();
+    const remote = await getRemoteVersion();
+    const release = await getLatestRelease();
+
+    if (compareVersions(remote.version, local.version) > 0) {
+      let msg = `*UPDATE AVAILABLE*\n\n`;
+      msg += `Current: v${local.version}\n`;
+      msg += `Latest: v${remote.version}\n\n`;
+      
+      if (remote.features && remote.features.length) {
+        msg += `*New Features:*\n`;
+        remote.features.forEach(f => msg += `• ${f}\n`);
+        msg += `\n`;
+      }
+      
+      msg += `Use :update to install`;
+
+      if (notifyJid && !updateNotificationSent) {
+        await sock.sendMessage(notifyJid, { text: msg });
+        updateNotificationSent = true;
+      }
+
+      return { available: true, local: local.version, remote: remote.version, features: remote.features, message: msg };
+    }
+
+    if (release && compareVersions(release.version, local.version) > 0) {
+      let msg = `*NEW RELEASE AVAILABLE*\n\n`;
+      msg += `Current: v${local.version}\n`;
+      msg += `Release: v${release.version}\n`;
+      if (release.name) msg += `Name: ${release.name}\n`;
+      msg += `\n${release.url}\n\n`;
+      msg += `Use :update to install`;
+
+      if (notifyJid && !updateNotificationSent) {
+        await sock.sendMessage(notifyJid, { text: msg });
+        updateNotificationSent = true;
+      }
+
+      return { available: true, local: local.version, remote: release.version, message: msg };
+    }
+
+    return { available: false };
+  } catch (e) {
+    return { available: false, error: e.message };
+  }
+};
+
+const startUpdateChecker = (sock, ownerJid) => {
+  setInterval(async () => {
+    try {
+      const lastCheck = fs.existsSync(UPDATE_CHECK_FILE) 
+        ? parseInt(fs.readFileSync(UPDATE_CHECK_FILE, 'utf8'))
+        : 0;
+      
+      const now = Date.now();
+      if (now - lastCheck < 180000) return;
+
+      fs.writeFileSync(UPDATE_CHECK_FILE, now.toString());
+
+      await checkForUpdates(sock, ownerJid);
+    } catch (e) {}
+  }, 180000);
+};
 
 module.exports = {
-  command: ["update"],
+  command: ['update', 'checkupdate'],
   owner: true,
+  sudo: true,
 
-  async execute(sock, m, { reply, isOwner }) {
+  async execute(sock, m, context) {
+    const { command, sender } = context;
 
-    if (!isOwner) return
+    if (command === 'checkupdate') {
+      const result = await checkForUpdates(sock);
 
-    if (!fs.existsSync(LOCAL_VERSION_FILE))
-      return reply("_Local version.json not found_")
+      if (result.error) {
+        return m.reply(`_Failed to check updates: ${result.error}_`);
+      }
 
-    reply("_Checking for updates..._")
+      if (result.available) {
+        return m.reply(result.message);
+      }
 
-    try {
-      const remoteData = (await axios.get(VERSION_URL, { cache: false })).data
-      const localData = readJSON(LOCAL_VERSION_FILE)
+      return m.reply(`_Bot is up to date (v${getLocalVersion().version})_`);
+    }
 
-      if (!remoteData.version)
-        return reply("_Remote version invalid_")
+    if (command === 'update') {
+      const check = await checkForUpdates(sock);
 
-      if (remoteData.version === localData.version)
-        return reply("_Bot is already up to date_")
+      if (check.error) {
+        return m.reply(`_Failed to check updates: ${check.error}_`);
+      }
 
-      reply(`_Updating from ${localData.version} → ${remoteData.version}_`)
+      if (!check.available) {
+        return m.reply(`_Bot is already up to date (v${getLocalVersion().version})_`);
+      }
 
-      const response = await axios.get(ZIP_URL, { responseType: "stream" })
-      await new Promise(resolve =>
-        response.data.pipe(fs.createWriteStream(TEMP_ZIP)).on("finish", resolve)
-      )
+      await m.reply(`_Updating from v${check.local} to v${check.remote}..._`);
 
-      await fs.createReadStream(TEMP_ZIP)
-        .pipe(unzipper.Extract({ path: TEMP_DIR }))
-        .promise()
+      try {
+        await performUpdate();
+        
+        await m.reply(`_✅ Update completed successfully!_\n\n_Restarting bot..._`);
+        
+        setTimeout(() => process.exit(0), 2000);
+      } catch (e) {
+        console.error('Update error:', e);
+        return m.reply(`_❌ Update failed: ${e.message}_`);
+      }
+    }
+  },
 
-      const folderName = fs.readdirSync(TEMP_DIR)[0]
-      const freshRoot = path.join(TEMP_DIR, folderName)
-
-      safeRemoveOld(ROOT, freshRoot)
-      safeCopy(freshRoot, ROOT)
-
-      fs.writeFileSync(LOCAL_VERSION_FILE, JSON.stringify(remoteData, null, 2))
-
-      fs.rmSync(TEMP_ZIP, { force: true })
-      fs.rmSync(TEMP_DIR, { recursive: true, force: true })
-
-      reply("_Update completed. Restarting..._")
-      process.exit(0)
-
-    } catch (e) {
-      console.log("UPDATE ERROR:", e)
-      reply("_Update failed_")
+  init: (sock, ownerNumbers) => {
+    if (ownerNumbers && ownerNumbers.length > 0) {
+      const ownerJid = ownerNumbers[0].includes('@') 
+        ? ownerNumbers[0] 
+        : ownerNumbers[0] + '@s.whatsapp.net';
+      
+      startUpdateChecker(sock, ownerJid);
     }
   }
-}
+};
