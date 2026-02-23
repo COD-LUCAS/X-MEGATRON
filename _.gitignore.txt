@@ -1,0 +1,93 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Session files
+session/
+*.session
+*.session.json
+library/session.json
+
+# Database files
+database/
+*.db
+*.sqlite
+*.sqlite3
+
+# User data
+disabled_commands.json
+sticker_bonds.json
+sudo.json
+owner.json
+.last_update_check
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# Node modules
+node_modules/
+package-lock.json
+yarn.lock
+
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+.temp/
+.cache/
+
+# Update temporary files
+.tmp_update/
+
+# Backup files
+*.backup
+*.bak
+*_backup
+
+# PM2
+.pm2/
+ecosystem.config.js
+
+# Media cache
+media/
+downloads/
+uploads/
+cache/
+
+# Test files
+test/
+*.test.js
+coverage/
+
+# Build files
+dist/
+build/
+
+# Pairing code (if using QR-less pairing)
+pairing_code.txt
+
+# Config overrides (keep config.js but ignore local overrides)
+config.local.js
