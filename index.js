@@ -129,6 +129,30 @@ const clientstart = async () => {
         log.success('Plugins loaded');
         const num = sock.user.id.split(':')[0];
         log.success(`Connected as +${num}`);
+        
+        try {
+          const updater = require('./plugins/updater');
+          if (updater.init) {
+            const ownerFromEnv = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean);
+            const ownerFromFile = [];
+            try {
+              const ownerFile = path.join(__dirname, 'owner.json');
+              if (fs.existsSync(ownerFile)) {
+                const raw = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+                if (Array.isArray(raw)) ownerFromFile.push(...raw);
+              }
+            } catch (e) {}
+            
+            const allOwners = [...ownerFromEnv, ...ownerFromFile];
+            if (allOwners.length > 0) {
+              updater.init(sock, allOwners);
+              log.success('Update checker started');
+            }
+          }
+        } catch (e) {
+          console.error('Updater init error:', e.message);
+        }
+
         try {
           if (fs.existsSync('./plugins/startup.js')) {
             require('./plugins/startup').execute(sock);
