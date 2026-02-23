@@ -9,7 +9,7 @@ const execAsync = promisify(exec);
 const GITHUB_REPO = 'COD-LUCAS/X-MEGATRON';
 const GITHUB_ZIP = 'https://github.com/COD-LUCAS/X-MEGATRON/archive/refs/heads/main.zip';
 const VERSION_URL = 'https://raw.githubusercontent.com/COD-LUCAS/X-MEGATRON/main/version.json';
-const RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+const RELEASES_API = `https://api.github.com/repos/COD-LUCAS/X-MEGATRON/releases/latest`;
 
 const LOCAL_VERSION_FILE = path.join(__dirname, '..', 'version.json');
 const UPDATE_CHECK_FILE = path.join(__dirname, '..', '.last_update_check');
