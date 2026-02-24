@@ -40,17 +40,6 @@ function getLocalVersion() {
   return { version: '1.0.0', features: [] };
 }
 
-function compareVersions(v1, v2) {
-  const parts1 = v1.split('.').map(Number);
-  const parts2 = v2.split('.').map(Number);
-  
-  for (let i = 0; i < 3; i++) {
-    if (parts1[i] > parts2[i]) return 1;
-    if (parts1[i] < parts2[i]) return -1;
-  }
-  return 0;
-}
-
 async function downloadUpdate() {
   const tempDir = path.join(__dirname, '..', 'update_temp');
   
@@ -85,18 +74,37 @@ async function extractUpdate(zipPath) {
 async function applyUpdate(extractedPath) {
   const rootDir = path.join(__dirname, '..');
 
+  const newPackageJson = path.join(extractedPath, 'package.json');
+  if (fs.existsSync(newPackageJson)) {
+    const tempPackage = path.join(rootDir, 'package.json.update');
+    fs.copyFileSync(newPackageJson, tempPackage);
+    
+    try {
+      await execAsync('npm install --legacy-peer-deps');
+    } catch (e) {
+      console.log('NPM install during update:', e.message);
+    }
+    
+    if (fs.existsSync(tempPackage)) {
+      fs.unlinkSync(tempPackage);
+    }
+  }
+
   for (const item of fs.readdirSync(rootDir)) {
     if (item === 'update_temp') continue;
+    if (item === 'node_modules') continue;
     if (isSafe(item)) continue;
     if (item.startsWith('.git')) continue;
 
     const itemPath = path.join(rootDir, item);
     
-    if (fs.statSync(itemPath).isFile()) {
-      fs.unlinkSync(itemPath);
-    } else {
-      fs.rmSync(itemPath, { recursive: true, force: true });
-    }
+    try {
+      if (fs.statSync(itemPath).isFile()) {
+        fs.unlinkSync(itemPath);
+      } else {
+        fs.rmSync(itemPath, { recursive: true, force: true });
+      }
+    } catch (e) {}
   }
 
   for (const item of fs.readdirSync(extractedPath)) {
@@ -105,11 +113,13 @@ async function applyUpdate(extractedPath) {
     const src = path.join(extractedPath, item);
     const dst = path.join(rootDir, item);
 
-    if (fs.statSync(src).isDirectory()) {
-      fs.cpSync(src, dst, { recursive: true });
-    } else {
-      fs.copyFileSync(src, dst);
-    }
+    try {
+      if (fs.statSync(src).isDirectory()) {
+        fs.cpSync(src, dst, { recursive: true });
+      } else {
+        fs.copyFileSync(src, dst);
+      }
+    } catch (e) {}
   }
 
   const tempDir = path.join(rootDir, 'update_temp');
@@ -272,12 +282,6 @@ module.exports = {
         });
       }
 
-      try {
-        await execAsync('npm install --legacy-peer-deps');
-      } catch (e) {
-        console.log('NPM install warning:', e.message);
-      }
-
       await sock.sendMessage(m.chat, {
         text: `_✅ Update successful! (v${local.version} → v${remote.version})_\n\n_⚠️ Protected: database/, session/, .env_\n\n_Restarting bot..._`,
         edit: statusMsg.key
@@ -306,4 +310,3 @@ module.exports = {
     }
   }
 };
-      
