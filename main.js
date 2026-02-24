@@ -6,9 +6,15 @@ const path = require('path');
 
 const processedMessages = new Set();
 
+const DATABASE_DIR = path.join(__dirname, 'database');
+if (!fs.existsSync(DATABASE_DIR)) {
+  fs.mkdirSync(DATABASE_DIR, { recursive: true });
+}
+
 global.disabledCommands = global.disabledCommands || new Set();
-const DISABLED_COMMANDS_FILE = path.join(__dirname, 'disabled_commands.json');
-const BOND_FILE = path.join(__dirname, 'sticker_bonds.json');
+const DISABLED_COMMANDS_FILE = path.join(DATABASE_DIR, 'disabled_commands.json');
+const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
+const SUDO_FILE = path.join(DATABASE_DIR, 'sudo.json');
 
 const loadDisabledCommands = () => {
   try {
@@ -62,17 +68,6 @@ const jidMatchesSuffix = (a, b) => {
   return false;
 };
 
-const loadOwnerList = () => {
-  const ownerFile = path.join(__dirname, 'owner.json');
-  try {
-    if (fs.existsSync(ownerFile)) {
-      const raw = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
-      return Array.isArray(raw) ? raw.map(normalizeJid) : [];
-    }
-  } catch (e) {}
-  return [];
-};
-
 const loadSudoList = () => {
   const fromEnv = (process.env.SUDO || '')
     .split(',')
@@ -81,9 +76,8 @@ const loadSudoList = () => {
 
   let fromFile = [];
   try {
-    const sudoFile = path.join(__dirname, 'sudo.json');
-    if (fs.existsSync(sudoFile)) {
-      const raw = JSON.parse(fs.readFileSync(sudoFile, 'utf8'));
+    if (fs.existsSync(SUDO_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(SUDO_FILE, 'utf8'));
       fromFile = Array.isArray(raw) ? raw.map(normalizeJid) : [];
     }
   } catch (e) {}
@@ -91,19 +85,9 @@ const loadSudoList = () => {
   return [...new Set([...fromEnv, ...fromFile])];
 };
 
-const checkIsOwner = (senderJid, ownerList) => {
-  if (!senderJid || !ownerList.length) return false;
-  return ownerList.some((entry) => jidMatchesSuffix(senderJid, entry));
-};
-
 const checkIsSudo = (senderJid, sudoList) => {
   if (!senderJid || !sudoList.length) return false;
   return sudoList.some((entry) => jidMatchesSuffix(senderJid, entry));
-};
-
-const checkIsCreator = (senderJid, botJid) => {
-  if (!senderJid || !botJid) return false;
-  return jidMatchesSuffix(senderJid, botJid);
 };
 
 const SPECIAL_PREFIX_RE = /^[°•π÷×¶∆£¢€¥®™+✓_=|~!?@()#,'"*+÷/\%^&.©^]/gi;
@@ -270,19 +254,9 @@ module.exports = async (sock, m) => {
     const senderJid = m.sender || m.key?.participant || m.key?.remoteJid || '';
     const botJid = sock.user?.id || '';
 
-    const ownerListFile = loadOwnerList();
     const sudoList = loadSudoList();
-    const ownerFromEnv = (process.env.OWNER || '')
-      .split(',')
-      .map((v) => normalizeJid(v.trim()))
-      .filter(Boolean);
-
-    const fullOwnerList = [botJid, ...ownerFromEnv, ...ownerListFile];
-
-    const isCreator = m.fromMe || checkIsCreator(senderJid, botJid);
-    const isOwnerFromList = checkIsOwner(senderJid, fullOwnerList);
-    const isSudo = !isCreator && !isOwnerFromList && checkIsSudo(senderJid, sudoList);
-    const isOwner = isCreator || isOwnerFromList || isSudo;
+    const isOwner = m.fromMe || checkIsSudo(senderJid, sudoList);
+    const isSudo = !m.fromMe && checkIsSudo(senderJid, sudoList);
 
     const mode = (process.env.MODE || 'public').toLowerCase();
 
@@ -319,7 +293,7 @@ module.exports = async (sock, m) => {
 
       isOwner,
       isSudo,
-      isCreator,
+      isCreator: m.fromMe,
       isAdmins,
       isBotAdmin,
 
@@ -342,7 +316,7 @@ module.exports = async (sock, m) => {
 
       reply: (txt) => m.reply(txt),
 
-      ownerNumbers: fullOwnerList.map(extractDigits),
+      ownerNumbers: sudoList.map(extractDigits),
 
       config,
     };
@@ -382,14 +356,14 @@ module.exports = async (sock, m) => {
       }
     }
 
-    if (!body) return;
+    if (!body || body.trim().length === 0) return;
 
     const detectedPrefix = detectPrefix(body, multiprefix);
     if (!detectedPrefix) return;
 
     const parts = body.slice(detectedPrefix.length).trim().split(/\s+/);
     const command = parts[0]?.toLowerCase();
-    if (!command) return;
+    if (!command || command.length === 0) return;
 
     const args = parts.slice(1);
     context.command = command;
