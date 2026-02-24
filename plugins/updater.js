@@ -37,7 +37,7 @@ function getLocalVersion() {
       return JSON.parse(fs.readFileSync(versionFile, 'utf8'));
     }
   } catch (e) {}
-  return { version: '0.0.0', features: [] };
+  return { version: '1.0.0', features: [] };
 }
 
 function compareVersions(v1, v2) {
@@ -129,9 +129,7 @@ async function checkAndNotify(sock, ownerJid) {
 
     if (!remote) return;
 
-    const comparison = compareVersions(remote.version, local.version);
-    if (comparison <= 0) return;
-
+    if (remote.version === local.version) return;
     if (lastNotifiedVersion === remote.version) return;
 
     let msg = `*UPDATE AVAILABLE*\n\n`;
@@ -179,9 +177,7 @@ module.exports = {
         });
       }
 
-      const comparison = compareVersions(remote.version, local.version);
-
-      if (comparison <= 0) {
+      if (remote.version === local.version) {
         return sock.sendMessage(m.chat, {
           text: `_Bot is up to date (v${local.version})_`,
           edit: statusMsg.key
@@ -190,7 +186,7 @@ module.exports = {
 
       let msg = `*UPDATE AVAILABLE*\n\n`;
       msg += `_📦 Current: v${local.version}_\n`;
-      msg += `_📦 New: v${remote.version}_\n\n`;
+      msg += `_📦 GitHub: v${remote.version}_\n\n`;
 
       if (remote.features?.length) {
         msg += `*New Features:*\n`;
@@ -225,11 +221,9 @@ module.exports = {
         });
       }
 
-      const comparison = compareVersions(remote.version, local.version);
-
-      if (comparison <= 0) {
+      if (remote.version === local.version) {
         return sock.sendMessage(m.chat, {
-          text: '_No updates available_',
+          text: '_Already on the same version_',
           edit: statusMsg.key
         });
       }
@@ -312,3 +306,4 @@ module.exports = {
     }
   }
 };
+      
