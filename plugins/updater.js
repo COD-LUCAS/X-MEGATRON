@@ -1,37 +1,24 @@
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 const { exec } = require('child_process');
 const { promisify } = require('util');
-const fs = require('fs');
-const fsSync = require('fs');
-const path = require('path');
-const axios = require('axios');
+const AdmZip = require('adm-zip');
 
 const execAsync = promisify(exec);
 
-const GITHUB_REPO = 'https://github.com/COD-LUCAS/X-MEGATRON.git';
+const GITHUB_ZIP = 'https://github.com/COD-LUCAS/X-MEGATRON/archive/refs/heads/main.zip';
 const GITHUB_RAW = 'https://raw.githubusercontent.com/COD-LUCAS/X-MEGATRON/main';
 
-async function isGitRepo() {
-  try {
-    await execAsync('git rev-parse --git-dir');
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
+const SAFE_DIRS = ['database', 'session', '.env', 'config.js'];
 
-async function setupGit() {
-  try {
-    if (fsSync.existsSync('.git')) {
-      await execAsync('rm -rf .git');
+function isSafe(itemPath) {
+  for (const safe of SAFE_DIRS) {
+    if (itemPath === safe || itemPath.startsWith(safe + '/') || itemPath.startsWith(safe + '\\')) {
+      return true;
     }
-    await execAsync('git init');
-    await execAsync(`git remote add origin ${GITHUB_REPO}`);
-    await execAsync('git fetch origin main');
-    await execAsync('git checkout -b main origin/main');
-    return true;
-  } catch (e) {
-    throw new Error(`Git setup failed: ${e.message}`);
   }
+  return false;
 }
 
 async function getRemoteVersion() {
@@ -43,69 +30,91 @@ async function getRemoteVersion() {
   }
 }
 
-async function getLocalVersion() {
+function getLocalVersion() {
   try {
     const versionFile = path.join(__dirname, '..', 'version.json');
-    if (fsSync.existsSync(versionFile)) {
-      return JSON.parse(fsSync.readFileSync(versionFile, 'utf8'));
+    if (fs.existsSync(versionFile)) {
+      return JSON.parse(fs.readFileSync(versionFile, 'utf8'));
     }
   } catch (e) {}
   return { version: '0.0.0', features: [] };
 }
 
-async function checkForUpdates() {
-  try {
-    if (!(await isGitRepo())) {
-      return { needsSetup: true };
-    }
-
-    await execAsync('git fetch origin main');
-    
-    const localVersion = await getLocalVersion();
-    const remoteVersion = await getRemoteVersion();
-
-    const { stdout: commitCount } = await execAsync('git rev-list --count HEAD..origin/main');
-    const totalCommits = parseInt(commitCount.trim());
-
-    let commits = [];
-    if (totalCommits > 0) {
-      const { stdout: logOutput } = await execAsync('git log --oneline HEAD..origin/main');
-      commits = logOutput.trim().split('\n').map(line => {
-        const parts = line.split(' ');
-        return parts.slice(1).join(' ');
-      });
-    }
-
-    const versionChanged = remoteVersion && remoteVersion.version !== localVersion.version;
-
-    return {
-      hasCommits: totalCommits > 0,
-      versionChanged,
-      localVersion: localVersion.version,
-      remoteVersion: remoteVersion?.version || localVersion.version,
-      commits,
-      totalCommits,
-      features: remoteVersion?.features || [],
-      isBeta: totalCommits > 0 && !versionChanged,
-      isStable: totalCommits > 0 && versionChanged
-    };
-  } catch (error) {
-    return { error: error.message };
+function compareVersions(v1, v2) {
+  const parts1 = v1.split('.').map(Number);
+  const parts2 = v2.split('.').map(Number);
+  
+  for (let i = 0; i < 3; i++) {
+    if (parts1[i] > parts2[i]) return 1;
+    if (parts1[i] < parts2[i]) return -1;
   }
+  return 0;
 }
 
-async function performUpdate() {
-  try {
-    await execAsync('git reset --hard HEAD');
-    await execAsync('git pull origin main');
-    
-    try {
-      await execAsync('npm install --legacy-peer-deps');
-    } catch (e) {}
+async function downloadUpdate() {
+  const tempDir = path.join(__dirname, '..', 'update_temp');
+  
+  if (fs.existsSync(tempDir)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(tempDir, { recursive: true });
 
-    return true;
-  } catch (error) {
-    throw error;
+  const response = await axios.get(GITHUB_ZIP, {
+    timeout: 30000,
+    responseType: 'arraybuffer'
+  });
+
+  const zipPath = path.join(__dirname, '..', 'update.zip');
+  fs.writeFileSync(zipPath, response.data);
+
+  return zipPath;
+}
+
+async function extractUpdate(zipPath) {
+  const tempDir = path.join(__dirname, '..', 'update_temp');
+  
+  const zip = new AdmZip(zipPath);
+  zip.extractAllTo(tempDir, true);
+
+  fs.unlinkSync(zipPath);
+
+  const extracted = fs.readdirSync(tempDir)[0];
+  return path.join(tempDir, extracted);
+}
+
+async function applyUpdate(extractedPath) {
+  const rootDir = path.join(__dirname, '..');
+
+  for (const item of fs.readdirSync(rootDir)) {
+    if (item === 'update_temp') continue;
+    if (isSafe(item)) continue;
+    if (item.startsWith('.git')) continue;
+
+    const itemPath = path.join(rootDir, item);
+    
+    if (fs.statSync(itemPath).isFile()) {
+      fs.unlinkSync(itemPath);
+    } else {
+      fs.rmSync(itemPath, { recursive: true, force: true });
+    }
+  }
+
+  for (const item of fs.readdirSync(extractedPath)) {
+    if (isSafe(item)) continue;
+
+    const src = path.join(extractedPath, item);
+    const dst = path.join(rootDir, item);
+
+    if (fs.statSync(src).isDirectory()) {
+      fs.cpSync(src, dst, { recursive: true });
+    } else {
+      fs.copyFileSync(src, dst);
+    }
+  }
+
+  const tempDir = path.join(rootDir, 'update_temp');
+  if (fs.existsSync(tempDir)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -113,55 +122,35 @@ let lastNotifiedVersion = null;
 
 async function checkAndNotify(sock, ownerJid) {
   try {
-    const result = await checkForUpdates();
-    
-    if (result.needsSetup || result.error) return;
-    if (!result.hasCommits) return;
-    if (lastNotifiedVersion === result.remoteVersion) return;
+    if (!ownerJid || !ownerJid.includes('@')) return;
 
-    let msg = '';
+    const local = getLocalVersion();
+    const remote = await getRemoteVersion();
 
-    if (result.isStable) {
-      msg = `*UPDATE AVAILABLE*\n\n`;
-      msg += `📦 Current: v${result.localVersion}\n`;
-      msg += `📦 New: v${result.remoteVersion}\n\n`;
+    if (!remote) return;
 
-      if (result.features?.length) {
-        msg += `*New Features:*\n`;
-        result.features.forEach(f => msg += `• ${f}\n`);
-        msg += `\n`;
-      }
+    const comparison = compareVersions(remote.version, local.version);
+    if (comparison <= 0) return;
 
-      if (result.commits.length) {
-        msg += `*Changelog:*\n`;
-        result.commits.slice(0, 5).forEach((c, i) => msg += `${i + 1}. ${c}\n`);
-        if (result.totalCommits > 5) {
-          msg += `\n_...and ${result.totalCommits - 5} more commits_\n`;
-        }
-      }
+    if (lastNotifiedVersion === remote.version) return;
 
-      msg += `\nUse :update now to install`;
-    } else if (result.isBeta) {
-      msg = `*BETA UPDATE AVAILABLE*\n\n`;
-      msg += `📦 Version: v${result.localVersion}\n`;
-      msg += `⚠️ ${result.totalCommits} new commit${result.totalCommits > 1 ? 's' : ''}\n\n`;
+    let msg = `*UPDATE AVAILABLE*\n\n`;
+    msg += `_Current: v${local.version}_\n`;
+    msg += `_Latest: v${remote.version}_\n\n`;
 
-      if (result.commits.length) {
-        msg += `*Changelog:*\n`;
-        result.commits.slice(0, 5).forEach((c, i) => msg += `${i + 1}. ${c}\n`);
-        if (result.totalCommits > 5) {
-          msg += `\n_...and ${result.totalCommits - 5} more commits_\n`;
-        }
-      }
-
-      msg += `\nUse :update now to install`;
+    if (remote.features?.length) {
+      msg += `*New Features:*\n`;
+      remote.features.forEach(f => msg += `_• ${f}_\n`);
+      msg += `\n`;
     }
 
-    if (msg && ownerJid) {
-      await sock.sendMessage(ownerJid, { text: msg });
-      lastNotifiedVersion = result.remoteVersion;
-    }
-  } catch (e) {}
+    msg += `_Use :update now to install_`;
+
+    await sock.sendMessage(ownerJid, { text: msg });
+    lastNotifiedVersion = remote.version;
+  } catch (e) {
+    console.error('Update notification error:', e.message);
+  }
 }
 
 function startUpdateChecker(sock, ownerJid) {
@@ -177,75 +166,39 @@ module.exports = {
   async execute(sock, m, context) {
     const { command, args } = context;
 
-    if (!(await isGitRepo())) {
-      const setupMsg = await m.reply('_Git not initialized. Setting up..._');
-
-      try {
-        await setupGit();
-        return sock.sendMessage(m.chat, {
-          text: '_✅ Git setup complete!_\n\n_Run :checkupdate again_',
-          edit: setupMsg.key
-        });
-      } catch (error) {
-        return sock.sendMessage(m.chat, {
-          text: `_❌ Setup failed: ${error.message}_`,
-          edit: setupMsg.key
-        });
-      }
-    }
-
-    const subCommand = args[0] ? args[0].toLowerCase() : '';
-
-    if (command === 'checkupdate' || !subCommand) {
+    if (command === 'checkupdate') {
       const statusMsg = await m.reply('_Checking for updates..._');
 
-      const result = await checkForUpdates();
+      const local = getLocalVersion();
+      const remote = await getRemoteVersion();
 
-      if (result.error) {
+      if (!remote) {
         return sock.sendMessage(m.chat, {
-          text: `_Failed to check updates: ${result.error}_`,
+          text: '_Failed to check remote version_',
           edit: statusMsg.key
         });
       }
 
-      if (!result.hasCommits) {
+      const comparison = compareVersions(remote.version, local.version);
+
+      if (comparison <= 0) {
         return sock.sendMessage(m.chat, {
-          text: `_Bot is up to date (v${result.localVersion})_`,
+          text: `_Bot is up to date (v${local.version})_`,
           edit: statusMsg.key
         });
       }
 
-      let msg = '';
+      let msg = `*UPDATE AVAILABLE*\n\n`;
+      msg += `_📦 Current: v${local.version}_\n`;
+      msg += `_📦 New: v${remote.version}_\n\n`;
 
-      if (result.isStable) {
-        msg = `*UPDATE AVAILABLE*\n\n`;
-        msg += `📦 Current: v${result.localVersion}\n`;
-        msg += `📦 New: v${result.remoteVersion}\n\n`;
-
-        if (result.features?.length) {
-          msg += `*New Features:*\n`;
-          result.features.forEach(f => msg += `• ${f}\n`);
-          msg += `\n`;
-        }
-
-        if (result.commits.length) {
-          msg += `*Changelog:*\n\n`;
-          result.commits.forEach((c, i) => msg += `${i + 1}. ${c}\n`);
-        }
-
-        msg += `\nUse :update now to install`;
-      } else if (result.isBeta) {
-        msg = `*BETA UPDATE AVAILABLE*\n\n`;
-        msg += `📦 Version: v${result.localVersion}\n`;
-        msg += `⚠️ ${result.totalCommits} new commit${result.totalCommits > 1 ? 's' : ''}\n\n`;
-
-        if (result.commits.length) {
-          msg += `*Changelog:*\n\n`;
-          result.commits.forEach((c, i) => msg += `${i + 1}. ${c}\n`);
-        }
-
-        msg += `\nUse :update now to install`;
+      if (remote.features?.length) {
+        msg += `*New Features:*\n`;
+        remote.features.forEach(f => msg += `_• ${f}_\n`);
+        msg += `\n`;
       }
+
+      msg += `_Use :update now to install_`;
 
       return sock.sendMessage(m.chat, {
         text: msg,
@@ -253,54 +206,109 @@ module.exports = {
       });
     }
 
-    if (subCommand === 'now' || subCommand === 'start') {
+    if (command === 'update') {
+      const subCommand = args[0] ? args[0].toLowerCase() : '';
+
+      if (subCommand !== 'now' && subCommand !== 'start') {
+        return m.reply('_Use :checkupdate first, then :update now to install_');
+      }
+
       const statusMsg = await m.reply('_Checking for updates..._');
 
-      const result = await checkForUpdates();
+      const local = getLocalVersion();
+      const remote = await getRemoteVersion();
 
-      if (result.error) {
+      if (!remote) {
         return sock.sendMessage(m.chat, {
-          text: `_Failed: ${result.error}_`,
+          text: '_Failed to check remote version_',
           edit: statusMsg.key
         });
       }
 
-      if (!result.hasCommits) {
+      const comparison = compareVersions(remote.version, local.version);
+
+      if (comparison <= 0) {
         return sock.sendMessage(m.chat, {
-          text: `_No updates available_`,
+          text: '_No updates available_',
           edit: statusMsg.key
         });
       }
 
       await sock.sendMessage(m.chat, {
-        text: `_Updating${result.isStable ? ' to v' + result.remoteVersion : ''}..._`,
+        text: '_⬇️ Downloading update..._',
+        edit: statusMsg.key
+      });
+
+      let zipPath;
+      try {
+        zipPath = await downloadUpdate();
+      } catch (error) {
+        return sock.sendMessage(m.chat, {
+          text: `_❌ Download failed: ${error.message}_`,
+          edit: statusMsg.key
+        });
+      }
+
+      await sock.sendMessage(m.chat, {
+        text: '_📦 Extracting update..._',
+        edit: statusMsg.key
+      });
+
+      let extractedPath;
+      try {
+        extractedPath = await extractUpdate(zipPath);
+      } catch (error) {
+        return sock.sendMessage(m.chat, {
+          text: `_❌ Extraction failed: ${error.message}_`,
+          edit: statusMsg.key
+        });
+      }
+
+      await sock.sendMessage(m.chat, {
+        text: '_♻️ Updating files..._',
         edit: statusMsg.key
       });
 
       try {
-        await performUpdate();
-
-        await sock.sendMessage(m.chat, {
-          text: `_✅ Update complete!_\n\n_Restarting bot..._`,
-          edit: statusMsg.key
-        });
-
-        setTimeout(() => process.exit(0), 2000);
+        await applyUpdate(extractedPath);
       } catch (error) {
         return sock.sendMessage(m.chat, {
           text: `_❌ Update failed: ${error.message}_`,
           edit: statusMsg.key
         });
       }
+
+      try {
+        await execAsync('npm install --legacy-peer-deps');
+      } catch (e) {
+        console.log('NPM install warning:', e.message);
+      }
+
+      await sock.sendMessage(m.chat, {
+        text: `_✅ Update successful! (v${local.version} → v${remote.version})_\n\n_⚠️ Protected: database/, session/, .env_\n\n_Restarting bot..._`,
+        edit: statusMsg.key
+      });
+
+      setTimeout(() => process.exit(0), 2000);
     }
   },
 
   init: (sock, ownerNumbers) => {
     if (ownerNumbers?.length > 0) {
-      const ownerJid = ownerNumbers[0].includes('@')
-        ? ownerNumbers[0]
-        : ownerNumbers[0] + '@s.whatsapp.net';
-      startUpdateChecker(sock, ownerJid);
+      const extractDigits = (jid) => {
+        if (!jid) return '';
+        return jid.split('@')[0].replace(/\D/g, '');
+      };
+
+      let ownerJid = ownerNumbers[0];
+      
+      if (!ownerJid.includes('@')) {
+        ownerJid = extractDigits(ownerJid) + '@s.whatsapp.net';
+      }
+
+      if (ownerJid && ownerJid.includes('@')) {
+        startUpdateChecker(sock, ownerJid);
+      }
     }
   }
 };
