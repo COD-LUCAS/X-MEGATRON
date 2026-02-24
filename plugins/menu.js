@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 const PLUGIN_DIR = __dirname;
-const DEFAULT_MENU_IMAGE = "https://i.ibb.co/JFWLfqnY/temp.jpg";
+const DEFAULT_MENU_IMAGE = path.join(__dirname, "..", "database", "img", "menu.jpg");
 
 let CACHED_MENU = null;
 
@@ -41,21 +41,24 @@ function buildMenuCache(prefix) {
 module.exports = {
   command: ["menu", "help"],
 
-  async execute(sock, m, { reply, prefix = ".", isOwner }) {
+  async execute(sock, m, context) {
     try {
-      const realPrefix = prefix || ".";
+      const prefix = context.prefix || ".";
+      const isOwner = context.isOwner || false;
       const mode = (process.env.MODE || "public").toUpperCase();
-      const ownerName = process.env.OWNER || "COD-LUCAS";
-      const menuImage = process.env.MENU_IMG || DEFAULT_MENU_IMAGE;
+      const ownerName = process.env.OWNER_NAME || process.env.OWNER || "COD-LUCAS";
 
       if (!CACHED_MENU) {
-        CACHED_MENU = buildMenuCache(realPrefix);
+        CACHED_MENU = buildMenuCache(prefix);
       }
 
       let version = "unknown";
       try {
-        const v = require("../version.json");
-        version = v.version || version;
+        const versionFile = path.join(__dirname, "..", "version.json");
+        if (fs.existsSync(versionFile)) {
+          const v = JSON.parse(fs.readFileSync(versionFile, "utf8"));
+          version = v.version || version;
+        }
       } catch {}
 
       const uptime = process.uptime();
@@ -65,7 +68,7 @@ module.exports = {
 
       let text = `*𝚾 𝚳𝚵𝐆𝚫𝚻𝚪𝚯𝚴*\n`;
       text += `────────────────────\n\n`;
-      text += `*PREFIX*  : ${realPrefix}\n`;
+      text += `*PREFIX*  : ${prefix}\n`;
       text += `*MODE*    : ${mode}\n`;
       text += `*OWNER*   : ${ownerName}\n`;
       text += `*VERSION* : ${version}\n`;
@@ -80,17 +83,25 @@ module.exports = {
         text += "\n\n";
       }
 
+      let imageBuffer;
+      if (fs.existsSync(DEFAULT_MENU_IMAGE)) {
+        imageBuffer = fs.readFileSync(DEFAULT_MENU_IMAGE);
+      } else {
+        const fallbackUrl = "https://i.ibb.co/JFWLfqnY/temp.jpg";
+        imageBuffer = { url: fallbackUrl };
+      }
+
       await sock.sendMessage(
         m.chat,
         {
-          image: { url: menuImage },
+          image: imageBuffer,
           caption: text
         },
         { quoted: m }
       );
 
     } catch (e) {
-      reply("Failed to load menu");
+      await m.reply("_Failed to load menu_");
     }
   }
 };
