@@ -1,7 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 
-const SUDO_FILE = path.join(__dirname, '..', 'sudo.json');
+const DATABASE_DIR = path.join(__dirname, '..', 'database');
+if (!fs.existsSync(DATABASE_DIR)) {
+  fs.mkdirSync(DATABASE_DIR, { recursive: true });
+}
+
+const SUDO_FILE = path.join(DATABASE_DIR, 'sudo.json');
 
 const extractDigits = (val) => val.replace(/[^0-9]/g, '');
 
@@ -49,7 +54,7 @@ module.exports = {
 
       if (!target || !extractDigits(target)) {
         return m.reply(
-          `Mention or provide a number!\nExample:\n${prefix}setsudo @tag\n${prefix}setsudo 62xxx`
+          `_Mention or provide a number!_\n\nExample:\n${prefix}setsudo @tag\n${prefix}setsudo 62xxx`
         );
       }
 
@@ -72,7 +77,7 @@ module.exports = {
       list.push(target);
       writeSudo(list);
 
-      return m.reply(`_Successfully added @${extractDigits(target)} as sudo_`);
+      return m.reply(`_✅ Successfully added @${extractDigits(target)} as sudo_`);
     }
 
     if (command === 'delsudo') {
@@ -80,7 +85,7 @@ module.exports = {
 
       if (!target || !extractDigits(target)) {
         return m.reply(
-          `Mention or provide a number!\nExample:\n${prefix}delsudo @tag\n${prefix}delsudo 91xxxxxxxxxx`
+          `_Mention or provide a number!_\n\nExample:\n${prefix}delsudo @tag\n${prefix}delsudo 62xxx`
         );
       }
 
@@ -96,14 +101,14 @@ module.exports = {
       list.splice(index, 1);
       writeSudo(list);
 
-      return m.reply(`_Successfully removed @${extractDigits(target)} from sudo_`);
+      return m.reply(`_✅ Successfully removed @${extractDigits(target)} from sudo_`);
     }
 
     if (command === 'listsudo') {
       const list = readSudo();
 
       if (!list.length) {
-        return m.reply('_Sudo list is empty_');
+        return m.reply('_📋 Sudo list is empty_');
       }
 
       let txt = '*------「 LIST SUDO 」------*\n\n';
