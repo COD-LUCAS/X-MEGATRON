@@ -1,7 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 
-const BOND_FILE = path.join(__dirname, '..', 'sticker_bonds.json');
+const DATABASE_DIR = path.join(__dirname, '..', 'database');
+if (!fs.existsSync(DATABASE_DIR)) {
+  fs.mkdirSync(DATABASE_DIR, { recursive: true });
+}
+
+const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
 
 const readBonds = () => {
   try {
@@ -16,36 +21,51 @@ const writeBonds = (bonds) => {
   fs.writeFileSync(BOND_FILE, JSON.stringify(bonds, null, 2));
 };
 
+const extractDigits = (val) => val.replace(/[^0-9]/g, '');
+
+const normalizeJid = (input) => {
+  if (!input) return '';
+  const digits = extractDigits(input);
+  if (!digits) return '';
+  if (input.includes('@lid')) return digits + '@lid';
+  if (input.includes('@s.whatsapp.net')) return digits + '@s.whatsapp.net';
+  return digits + '@s.whatsapp.net';
+};
+
+const jidMatchesSuffix = (a, b) => {
+  const da = extractDigits(a);
+  const db = extractDigits(b);
+  if (!da || !db) return false;
+  if (da === db) return true;
+  if (da.length >= 7 && db.length >= 7) return da.slice(-10) === db.slice(-10);
+  return false;
+};
+
 module.exports = {
   command: ['bond', 'unbond', 'listbond'],
   owner: true,
 
   async execute(sock, m, context) {
-    const { command, args, text, prefix } = context;
+    const { command, args, text, prefix, sender } = context;
 
     if (command === 'bond') {
       if (!text) {
         return m.reply(`*STICKER BOND*
 
-Bind a sticker to execute a command
+Bind a sticker to execute a command automatically
 
 *Usage:*
 Reply to a sticker: ${prefix}bond <command>
 
 *Examples:*
 ${prefix}bond kick
+${prefix}bond vv
 ${prefix}bond ping
-${prefix}bond vv @jid
-
-*How to use bonded stickers:*
-• Simple commands: Just send the sticker
-• Commands needing quotes (vv, kick): Reply to the message with the sticker
 
 *Note:*
 • Only owner can bond stickers
 • Anyone can use bonded stickers
-• Use ${prefix}unbond to remove
-• Use ${prefix}listbond to see all bonds`);
+• Use ${prefix}unbond to remove bond`);
       }
 
       if (!m.quoted) {
