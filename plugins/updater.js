@@ -1,16 +1,12 @@
-const axios = require('axios');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
-const { promisify } = require('util');
-const AdmZip = require('adm-zip');
-
-const execAsync = promisify(exec);
+const { execSync } = require('child_process');
 
 const GITHUB_ZIP = 'https://github.com/COD-LUCAS/X-MEGATRON/archive/refs/heads/main.zip';
 const GITHUB_RAW = 'https://raw.githubusercontent.com/COD-LUCAS/X-MEGATRON/main';
 
-const SAFE_DIRS = ['database', 'session', '.env', 'config.js'];
+const SAFE_DIRS = ['database', 'session', '.env', 'config.js', 'node_modules'];
 
 function isSafe(itemPath) {
   for (const safe of SAFE_DIRS) {
@@ -21,10 +17,25 @@ function isSafe(itemPath) {
   return false;
 }
 
+function httpsGet(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'X-MEGATRON-Bot' } }, (res) => {
+      if (res.statusCode === 302 || res.statusCode === 301) {
+        return httpsGet(res.headers.location).then(resolve).catch(reject);
+      }
+      let data = Buffer.alloc(0);
+      res.on('data', chunk => data = Buffer.concat([data, chunk]));
+      res.on('end', () => resolve(data));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
 async function getRemoteVersion() {
   try {
-    const response = await axios.get(`${GITHUB_RAW}/version.json`, { timeout: 10000 });
-    return response.data;
+    const url = `${GITHUB_RAW}/version.json?t=${Date.now()}`;
+    const data = await httpsGet(url);
+    return JSON.parse(data.toString());
   } catch (error) {
     return null;
   }
@@ -41,6 +52,13 @@ function getLocalVersion() {
 }
 
 async function downloadUpdate() {
+  const data = await httpsGet(GITHUB_ZIP);
+  const zipPath = path.join(__dirname, '..', 'update.zip');
+  fs.writeFileSync(zipPath, data);
+  return zipPath;
+}
+
+function extractUpdate(zipPath) {
   const tempDir = path.join(__dirname, '..', 'update_temp');
   
   if (fs.existsSync(tempDir)) {
@@ -48,22 +66,11 @@ async function downloadUpdate() {
   }
   fs.mkdirSync(tempDir, { recursive: true });
 
-  const response = await axios.get(GITHUB_ZIP, {
-    timeout: 30000,
-    responseType: 'arraybuffer'
-  });
-
-  const zipPath = path.join(__dirname, '..', 'update.zip');
-  fs.writeFileSync(zipPath, response.data);
-
-  return zipPath;
-}
-
-async function extractUpdate(zipPath) {
-  const tempDir = path.join(__dirname, '..', 'update_temp');
-  
-  const zip = new AdmZip(zipPath);
-  zip.extractAllTo(tempDir, true);
+  try {
+    execSync(`unzip -q "${zipPath}" -d "${tempDir}"`, { stdio: 'ignore' });
+  } catch (e) {
+    throw new Error('Unzip failed. Install unzip: apt-get install unzip');
+  }
 
   fs.unlinkSync(zipPath);
 
@@ -71,28 +78,11 @@ async function extractUpdate(zipPath) {
   return path.join(tempDir, extracted);
 }
 
-async function applyUpdate(extractedPath) {
+function applyUpdate(extractedPath) {
   const rootDir = path.join(__dirname, '..');
-
-  const newPackageJson = path.join(extractedPath, 'package.json');
-  if (fs.existsSync(newPackageJson)) {
-    const tempPackage = path.join(rootDir, 'package.json.update');
-    fs.copyFileSync(newPackageJson, tempPackage);
-    
-    try {
-      await execAsync('npm install --legacy-peer-deps');
-    } catch (e) {
-      console.log('NPM install during update:', e.message);
-    }
-    
-    if (fs.existsSync(tempPackage)) {
-      fs.unlinkSync(tempPackage);
-    }
-  }
 
   for (const item of fs.readdirSync(rootDir)) {
     if (item === 'update_temp') continue;
-    if (item === 'node_modules') continue;
     if (isSafe(item)) continue;
     if (item.startsWith('.git')) continue;
 
@@ -138,7 +128,6 @@ async function checkAndNotify(sock, ownerJid) {
     const remote = await getRemoteVersion();
 
     if (!remote) return;
-
     if (remote.version === local.version) return;
     if (lastNotifiedVersion === remote.version) return;
 
@@ -156,9 +145,7 @@ async function checkAndNotify(sock, ownerJid) {
 
     await sock.sendMessage(ownerJid, { text: msg });
     lastNotifiedVersion = remote.version;
-  } catch (e) {
-    console.error('Update notification error:', e.message);
-  }
+  } catch (e) {}
 }
 
 function startUpdateChecker(sock, ownerJid) {
@@ -167,7 +154,7 @@ function startUpdateChecker(sock, ownerJid) {
 }
 
 module.exports = {
-  command: ['update', 'checkupdate'],
+  command: ['update', 'checkupdate', 'hardupdate'],
   owner: true,
   sudo: true,
 
@@ -212,6 +199,61 @@ module.exports = {
       });
     }
 
+    if (command === 'hardupdate') {
+      const statusMsg = await m.reply('_⚠️ Force updating from GitHub..._');
+
+      await sock.sendMessage(m.chat, {
+        text: '_⬇️ Downloading update..._',
+        edit: statusMsg.key
+      });
+
+      let zipPath;
+      try {
+        zipPath = await downloadUpdate();
+      } catch (error) {
+        return sock.sendMessage(m.chat, {
+          text: `_❌ Download failed: ${error.message}_`,
+          edit: statusMsg.key
+        });
+      }
+
+      await sock.sendMessage(m.chat, {
+        text: '_📦 Extracting update..._',
+        edit: statusMsg.key
+      });
+
+      let extractedPath;
+      try {
+        extractedPath = extractUpdate(zipPath);
+      } catch (error) {
+        return sock.sendMessage(m.chat, {
+          text: `_❌ ${error.message}_`,
+          edit: statusMsg.key
+        });
+      }
+
+      await sock.sendMessage(m.chat, {
+        text: '_♻️ Updating files..._',
+        edit: statusMsg.key
+      });
+
+      try {
+        applyUpdate(extractedPath);
+      } catch (error) {
+        return sock.sendMessage(m.chat, {
+          text: `_❌ Update failed: ${error.message}_`,
+          edit: statusMsg.key
+        });
+      }
+
+      await sock.sendMessage(m.chat, {
+        text: `_✅ Hard update successful!_\n\n_⚠️ Protected: database/, session/, .env, node_modules/_\n\n_Restarting in 3 seconds..._`,
+        edit: statusMsg.key
+      });
+
+      setTimeout(() => process.exit(0), 3000);
+    }
+
     if (command === 'update') {
       const subCommand = args[0] ? args[0].toLowerCase() : '';
 
@@ -233,7 +275,7 @@ module.exports = {
 
       if (remote.version === local.version) {
         return sock.sendMessage(m.chat, {
-          text: '_Already on the same version_',
+          text: '_Already on the same version. Use :hardupdate to force update_',
           edit: statusMsg.key
         });
       }
@@ -260,10 +302,10 @@ module.exports = {
 
       let extractedPath;
       try {
-        extractedPath = await extractUpdate(zipPath);
+        extractedPath = extractUpdate(zipPath);
       } catch (error) {
         return sock.sendMessage(m.chat, {
-          text: `_❌ Extraction failed: ${error.message}_`,
+          text: `_❌ ${error.message}_`,
           edit: statusMsg.key
         });
       }
@@ -274,7 +316,7 @@ module.exports = {
       });
 
       try {
-        await applyUpdate(extractedPath);
+        applyUpdate(extractedPath);
       } catch (error) {
         return sock.sendMessage(m.chat, {
           text: `_❌ Update failed: ${error.message}_`,
@@ -283,11 +325,11 @@ module.exports = {
       }
 
       await sock.sendMessage(m.chat, {
-        text: `_✅ Update successful! (v${local.version} → v${remote.version})_\n\n_⚠️ Protected: database/, session/, .env_\n\n_Restarting bot..._`,
+        text: `_✅ Update successful! (v${local.version} → v${remote.version})_\n\n_⚠️ Protected: database/, session/, .env, node_modules/_\n\n_Restarting in 3 seconds..._`,
         edit: statusMsg.key
       });
 
-      setTimeout(() => process.exit(0), 2000);
+      setTimeout(() => process.exit(0), 3000);
     }
   },
 
