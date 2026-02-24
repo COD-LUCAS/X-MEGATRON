@@ -53,7 +53,8 @@
     "yt-search": "^2.12.1",
     "ytsr": "^3.8.4",
     "simple-git": "^3.22.0",
-    "unzipper": "^0.10.14"
+    "unzipper": "^0.10.14",
+    "adm-zip": "^0.5.10"
   },
   "devDependencies": {},
   "repository": {
