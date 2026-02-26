@@ -21,7 +21,7 @@ function isProtected(itemPath) {
 
 async function getRemoteVersion() {
   try {
-    const { stdout } = await execAsync(`curl -s "${GITHUB_RAW}/version.json"`);
+    const { stdout } = await execAsync(`curl -sL --max-time 5 "${GITHUB_RAW}/version.json"`);
     return JSON.parse(stdout);
   } catch (error) {
     return null;
@@ -38,7 +38,7 @@ function getLocalVersion() {
   return { version: '0.0.0', features: [] };
 }
 
-async function performUpdate() {
+async function downloadAndUpdate() {
   const rootDir = path.join(__dirname, '..');
   const tempZip = path.join(rootDir, 'update.zip');
   const tempDir = path.join(rootDir, 'update_temp');
@@ -48,25 +48,21 @@ async function performUpdate() {
   }
   fs.mkdirSync(tempDir, { recursive: true });
 
-  await execAsync(`curl -L "${GITHUB_ZIP}" -o "${tempZip}"`);
+  await execAsync(`curl -L --max-time 30 "${GITHUB_ZIP}" -o "${tempZip}"`);
+  
   await execAsync(`unzip -o -q "${tempZip}" -d "${tempDir}"`);
   fs.unlinkSync(tempZip);
 
   const extractedFolder = fs.readdirSync(tempDir).find(f => f.startsWith('X-MEGATRON'));
   const extractedPath = path.join(tempDir, extractedFolder);
 
-  const itemsToDelete = [];
   for (const item of fs.readdirSync(rootDir)) {
     if (item === 'update_temp') continue;
     if (isProtected(item)) continue;
-    itemsToDelete.push(item);
-  }
 
-  for (const item of itemsToDelete) {
     const itemPath = path.join(rootDir, item);
     try {
-      const stat = fs.statSync(itemPath);
-      if (stat.isDirectory()) {
+      if (fs.statSync(itemPath).isDirectory()) {
         fs.rmSync(itemPath, { recursive: true, force: true });
       } else {
         fs.unlinkSync(itemPath);
@@ -81,8 +77,7 @@ async function performUpdate() {
     const dst = path.join(rootDir, item);
 
     try {
-      const stat = fs.statSync(src);
-      if (stat.isDirectory()) {
+      if (fs.statSync(src).isDirectory()) {
         fs.cpSync(src, dst, { recursive: true });
       } else {
         fs.copyFileSync(src, dst);
@@ -179,70 +174,42 @@ module.exports = {
     }
 
     if (command === 'update' && args[0] === 'now') {
-      const statusMsg = await m.reply('_Checking for updates..._');
-
       const local = getLocalVersion();
       const remote = await getRemoteVersion();
 
       if (!remote) {
-        return sock.sendMessage(m.chat, {
-          text: '_Failed to fetch remote version_',
-          edit: statusMsg.key
-        });
+        return m.reply('_Failed to fetch remote version_');
       }
 
       if (remote.version === local.version) {
-        return sock.sendMessage(m.chat, {
-          text: '_Already on latest version. Use :hardupdate to force update_',
-          edit: statusMsg.key
-        });
+        return m.reply('_Already on latest version. Use :hardupdate to force update_');
       }
 
-      try {
-        await sock.sendMessage(m.chat, {
-          text: '_⬇️ Downloading update..._',
-          edit: statusMsg.key
+      await m.reply(`_Updating from v${local.version} to v${remote.version}..._`);
+
+      downloadAndUpdate()
+        .then(() => {
+          process.exit(0);
+        })
+        .catch((error) => {
+          m.reply(`_❌ Update failed: ${error.message}_`);
         });
 
-        await performUpdate();
-
-        await sock.sendMessage(m.chat, {
-          text: `_✅ Updated! (v${local.version} → v${remote.version})_\n\n_Protected: database, session, node_modules, .env_\n\n_Restarting..._`,
-          edit: statusMsg.key
-        });
-
-        setTimeout(() => process.exit(0), 2000);
-      } catch (error) {
-        return sock.sendMessage(m.chat, {
-          text: `_❌ Update failed: ${error.message}_`,
-          edit: statusMsg.key
-        });
-      }
+      return;
     }
 
     if (command === 'hardupdate') {
-      const statusMsg = await m.reply('_⚠️ Force updating..._');
+      await m.reply('_⚠️ Force updating from GitHub..._');
 
-      try {
-        await sock.sendMessage(m.chat, {
-          text: '_⬇️ Downloading update..._',
-          edit: statusMsg.key
+      downloadAndUpdate()
+        .then(() => {
+          process.exit(0);
+        })
+        .catch((error) => {
+          m.reply(`_❌ Update failed: ${error.message}_`);
         });
 
-        await performUpdate();
-
-        await sock.sendMessage(m.chat, {
-          text: `_✅ Hard update complete!_\n\n_Protected: database, session, node_modules, .env_\n\n_Restarting..._`,
-          edit: statusMsg.key
-        });
-
-        setTimeout(() => process.exit(0), 2000);
-      } catch (error) {
-        return sock.sendMessage(m.chat, {
-          text: `_❌ Update failed: ${error.message}_`,
-          edit: statusMsg.key
-        });
-      }
+      return;
     }
   },
 
