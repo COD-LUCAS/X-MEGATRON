@@ -3,13 +3,6 @@ require('dotenv').config();
 
 const config = () => require('./config');
 
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-});
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Rejection:', err);
-});
-
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -30,6 +23,9 @@ const loadBaileys = async () => {
 
 const SESSION_BACKUP = './library/session.json';
 
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
+
 const initSession = async (sessionDir) => {
   if (!fs.existsSync('./library')) {
     fs.mkdirSync('./library', { recursive: true });
@@ -39,9 +35,7 @@ const initSession = async (sessionDir) => {
   if (fs.existsSync(SESSION_BACKUP)) {
     try {
       saved = JSON.parse(fs.readFileSync(SESSION_BACKUP, 'utf8'));
-    } catch (e) {
-      console.error('Failed to read session backup:', e.message);
-    }
+    } catch (e) {}
   }
 
   const envSession = process.env.SESSION_ID;
@@ -51,7 +45,6 @@ const initSession = async (sessionDir) => {
   }
 
   if (saved.SESSION_ID && saved.SESSION_ID !== envSession) {
-    log.warn('Session changed, clearing old session');
     if (fs.existsSync(sessionDir)) {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     }
@@ -116,7 +109,7 @@ const clientstart = async () => {
     const sock = makeWASocket({
       auth: state,
       version,
-      logger: require('pino')({ level: 'silent' }),
+      logger: require('pino')({ level: 'fatal' }),
       printQRInTerminal: false,
       browser: Browsers.macOS('Chrome'),
       getMessage: async () => ({ conversation: '' })
@@ -129,7 +122,7 @@ const clientstart = async () => {
         log.success('Plugins loaded');
         const num = sock.user.id.split(':')[0];
         log.success(`Connected as +${num}`);
-        
+
         try {
           const updater = require('./plugins/updater');
           if (updater.init) {
@@ -149,23 +142,19 @@ const clientstart = async () => {
               log.success('Update checker started');
             }
           }
-        } catch (e) {
-          console.error('Updater init error:', e.message);
-        }
+        } catch (e) {}
 
         try {
           if (fs.existsSync('./plugins/startup.js')) {
             require('./plugins/startup').execute(sock);
           }
-        } catch (e) {
-          console.error('Startup plugin error:', e.message);
-        }
+        } catch (e) {}
       }
 
       if (connection === 'close') {
         const code = lastDisconnect?.error?.output?.statusCode;
+
         if (code !== DisconnectReason.loggedOut) {
-          log.warn('Connection closed, reconnecting in 5s');
           setTimeout(clientstart, 5000);
         } else {
           log.error('Logged out, please get new SESSION_ID');
@@ -185,9 +174,7 @@ const clientstart = async () => {
         const { smsg } = require('./library/manager');
         const m = await smsg(sock, mek);
         require('./main')(sock, m);
-      } catch (e) {
-        console.error('Message handler error:', e.message);
-      }
+      } catch (e) {}
     });
 
     sock.decodeJid = (jid) => {
@@ -200,7 +187,6 @@ const clientstart = async () => {
 
   } catch (error) {
     log.error('Fatal error:', error.message);
-    console.error(error);
     process.exit(1);
   }
 };
