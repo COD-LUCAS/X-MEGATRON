@@ -55,18 +55,13 @@ module.exports = {
 Bind a sticker to execute a command automatically
 
 *Usage:*
-Reply to a sticker: ${prefix}bond <command>
+Reply to a sticker: ${prefix}bond {prefix}<command>
 
 *Examples:*
-${prefix}bond kick
-${prefix}bond vv
-${prefix}bond ping
-
-*Note:*
-• Only owner can bond stickers
-• Anyone can use bonded stickers
-• Use ${prefix}unbond to remove bond`);
-      }
+${prefix}bond .kick
+${prefix}bond .vv
+${prefix}bond .ping
+     }
 
       if (!m.quoted) {
         return m.reply(`_Reply to a sticker_\n_Ex: ${prefix}bond kick_`);
