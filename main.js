@@ -90,8 +90,8 @@ const checkIsSudo = (senderJid, sudoList) => {
   return sudoList.some((entry) => jidMatchesSuffix(senderJid, entry));
 };
 
-const SPECIAL_PREFIX_RE = /^[°•π÷×¶∆£¢€¥®™+✓_=|~!?@()#,'"*+÷/\%^&.©^]/gi;
-const EMOJI_PREFIX_RE = /^[\uD800-\uDBFF][\uDC00-\uDFFF]/gi;
+const SPECIAL_PREFIX_RE = /^[°•π÷×¶∆£¢€¥®™+✓_=|~!?@()#,'"*+÷/\%^&.©^]/;
+const EMOJI_PREFIX_RE = /^[\uD800-\uDBFF][\uDC00-\uDFFF]/;
 
 const getListPrefix = () => {
   const raw = process.env.LIST_PREFIX || process.env.PREFIX || '.';
@@ -104,14 +104,11 @@ const detectPrefix = (body, multiprefix) => {
   const listPrefix = getListPrefix();
 
   if (multiprefix) {
-    if (SPECIAL_PREFIX_RE.test(body)) {
-      const match = body.match(SPECIAL_PREFIX_RE);
-      return match ? match[0] : null;
-    }
-    if (EMOJI_PREFIX_RE.test(body)) {
-      const match = body.match(EMOJI_PREFIX_RE);
-      return match ? match[0] : null;
-    }
+    const specialMatch = body.match(SPECIAL_PREFIX_RE);
+    if (specialMatch) return specialMatch[0];
+    
+    const emojiMatch = body.match(EMOJI_PREFIX_RE);
+    if (emojiMatch) return emojiMatch[0];
   }
 
   for (const prefix of listPrefix) {
@@ -124,66 +121,63 @@ const detectPrefix = (body, multiprefix) => {
 class PluginLoader {
   constructor() {
     this.plugins = [];
+    this.commandMap = new Map();
     this.loadPlugins();
   }
 
   loadPlugins() {
     const pluginDir = path.join(__dirname, 'plugins');
     if (!fs.existsSync(pluginDir)) return;
+    
     this.plugins = [];
-    for (const file of fs.readdirSync(pluginDir)) {
+    this.commandMap.clear();
+    
+    const files = fs.readdirSync(pluginDir);
+    for (const file of files) {
       if (!file.endsWith('.js')) continue;
       try {
         delete require.cache[require.resolve(path.join(pluginDir, file))];
         const plugin = require(path.join(pluginDir, file));
+        
         if (plugin?.command || plugin?.onText || plugin?.autoReveal) {
           this.plugins.push(plugin);
+          
+          if (plugin.command) {
+            const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
+            cmds.forEach(cmd => this.commandMap.set(cmd, plugin));
+          }
         }
-      } catch (e) {
-        console.log(`[PluginLoader] Failed to load ${file}:`, e.message);
-      }
+      } catch (e) {}
     }
   }
 
   async executeCommand(command, sock, m, context) {
     if (global.disabledCommands.has(command)) {
-      await m.reply('_❌ This command has been disabled by the owner_');
-      return;
+      return m.reply('_❌ This command has been disabled by the owner_');
     }
 
-    for (const plugin of this.plugins) {
-      if (!plugin.command) continue;
-      const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
-      if (!cmds.includes(command)) continue;
+    const plugin = this.commandMap.get(command);
+    if (!plugin) return;
 
-      if (plugin.owner === true && !context.isOwner) {
-        await m.reply('_❌ This command is for the owner only_');
-        return;
-      }
-      if (plugin.sudo === true && !context.isOwner && !context.isSudo) {
-        await m.reply('_❌ This command is for sudo/owner only_');
-        return;
-      }
-      if (plugin.admin === true && !context.isAdmins && !context.isOwner) {
-        await m.reply('_❌ This command is for group admins only_');
-        return;
-      }
-      if (plugin.group === true && !context.isGroup) {
-        await m.reply('_❌ This command can only be used in groups_');
-        return;
-      }
-      if (plugin.private === true && context.isGroup) {
-        await m.reply('_❌ This command can only be used in private chat_');
-        return;
-      }
-
-      try {
-        await plugin.execute(sock, m, context);
-      } catch (e) {
-        console.error(`[Plugin error] (${command}):`, e.message);
-      }
-      return;
+    if (plugin.owner === true && !context.isOwner) {
+      return m.reply('_❌ This command is for the owner only_');
     }
+    if (plugin.sudo === true && !context.isOwner && !context.isSudo) {
+      return m.reply('_❌ This command is for sudo/owner only_');
+    }
+    if (plugin.admin === true && !context.isAdmins && !context.isOwner) {
+      return m.reply('_❌ This command is for group admins only_');
+    }
+    if (plugin.group === true && !context.isGroup) {
+      return m.reply('_❌ This command can only be used in groups_');
+    }
+    if (plugin.private === true && context.isGroup) {
+      return m.reply('_❌ This command can only be used in private chat_');
+    }
+
+    try {
+      await plugin.execute(sock, m, context);
+    } catch (e) {}
   }
 
   async executeOnText(sock, m, context) {
@@ -247,8 +241,6 @@ module.exports = async (sock, m) => {
             }
           })()
         : '') ||
-      m.message?.editedMessage?.message?.protocolMessage?.editedMessage?.extendedTextMessage?.text ||
-      m.message?.editedMessage?.message?.protocolMessage?.editedMessage?.conversation ||
       '';
 
     const senderJid = m.sender || m.key?.participant || m.key?.remoteJid || '';
@@ -289,7 +281,7 @@ module.exports = async (sock, m) => {
     const context = {
       command: null,
       args: [],
-      text: body,
+      text: body || '',
 
       isOwner,
       isSudo,
@@ -320,8 +312,6 @@ module.exports = async (sock, m) => {
 
       config,
     };
-
-    pluginLoader.executeOnText(sock, m, context).catch(() => {});
 
     if (m.message?.stickerMessage) {
       let stickerHash = null;
@@ -359,7 +349,10 @@ module.exports = async (sock, m) => {
     if (!body || body.trim().length === 0) return;
 
     const detectedPrefix = detectPrefix(body, multiprefix);
-    if (!detectedPrefix) return;
+    if (!detectedPrefix) {
+      pluginLoader.executeOnText(sock, m, context).catch(() => {});
+      return;
+    }
 
     const parts = body.slice(detectedPrefix.length).trim().split(/\s+/);
     const command = parts[0]?.toLowerCase();
@@ -371,9 +364,7 @@ module.exports = async (sock, m) => {
     context.text = args.join(' ');
 
     await pluginLoader.executeCommand(command, sock, m, context);
-  } catch (e) {
-    console.error('[Handler error]', e.message);
-  }
+  } catch (e) {}
 };
 
 let file = require.resolve(__filename);
