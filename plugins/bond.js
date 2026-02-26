@@ -21,50 +21,20 @@ const writeBonds = (bonds) => {
   fs.writeFileSync(BOND_FILE, JSON.stringify(bonds, null, 2));
 };
 
-const extractDigits = (val) => val.replace(/[^0-9]/g, '');
-
-const normalizeJid = (input) => {
-  if (!input) return '';
-  const digits = extractDigits(input);
-  if (!digits) return '';
-  if (input.includes('@lid')) return digits + '@lid';
-  if (input.includes('@s.whatsapp.net')) return digits + '@s.whatsapp.net';
-  return digits + '@s.whatsapp.net';
-};
-
-const jidMatchesSuffix = (a, b) => {
-  const da = extractDigits(a);
-  const db = extractDigits(b);
-  if (!da || !db) return false;
-  if (da === db) return true;
-  if (da.length >= 7 && db.length >= 7) return da.slice(-10) === db.slice(-10);
-  return false;
-};
-
 module.exports = {
   command: ['bond', 'unbond', 'listbond'],
   owner: true,
 
   async execute(sock, m, context) {
-    const { command, args, text, prefix, sender } = context;
+    const { command, args, text, prefix } = context;
 
     if (command === 'bond') {
       if (!text) {
-        return m.reply(`*STICKER BOND*
-
-Bind a sticker to execute a command automatically
-
-*Usage:*
-Reply to a sticker: ${prefix}bond {prefix}<command>
-
-*Examples:*
-${prefix}bond .kick
-${prefix}bond .vv
-${prefix}bond .ping
-     }
+        return m.reply(`_Reply to sticker: ${prefix}bond <command>_\n\n_Example: ${prefix}bond kick_`);
+      }
 
       if (!m.quoted) {
-        return m.reply(`_Reply to a sticker_\n_Ex: ${prefix}bond kick_`);
+        return m.reply(`_Reply to a sticker_`);
       }
 
       let stickerHash = null;
@@ -78,28 +48,33 @@ ${prefix}bond .ping
       }
 
       if (!stickerHash) {
-        return m.reply(`_Reply to a sticker_\n_Ex: ${prefix}bond kick_`);
+        return m.reply(`_Reply to a sticker_`);
       }
 
       let targetCommand = text.trim();
-      if (targetCommand.startsWith(prefix)) {
-        targetCommand = targetCommand.slice(prefix.length);
+
+      const allPrefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',');
+      for (const p of allPrefixes) {
+        if (targetCommand.startsWith(p)) {
+          targetCommand = targetCommand.slice(p.length);
+          break;
+        }
       }
 
       if (!targetCommand) {
-        return m.reply(`_Invalid command!_\n\nExample: ${prefix}bond kick`);
+        return m.reply(`_Invalid command_`);
       }
 
       const bonds = readBonds();
       bonds[stickerHash] = targetCommand;
       writeBonds(bonds);
 
-      return m.reply(`_Sticked command ${targetCommand} to this sticker!_`);
+      return m.reply(`_Bonded sticker to ${prefix}${targetCommand}_`);
     }
 
     if (command === 'unbond') {
       if (!m.quoted) {
-        return m.reply(`_Reply to a bonded sticker!_\n\nExample:\n[Reply to sticker]\n${prefix}unbond`);
+        return m.reply(`_Reply to bonded sticker_`);
       }
 
       let stickerHash = null;
@@ -113,20 +88,20 @@ ${prefix}bond .ping
       }
 
       if (!stickerHash) {
-        return m.reply('_Failed!_');
+        return m.reply('_Failed_');
       }
 
       const bonds = readBonds();
 
       if (!bonds[stickerHash]) {
-        return m.reply('_This sticker is not bonded to any command_');
+        return m.reply('_Sticker not bonded_');
       }
 
       const boundCommand = bonds[stickerHash];
       delete bonds[stickerHash];
       writeBonds(bonds);
 
-      return m.reply(`_Sticker unbonded from command: ${prefix}${boundCommand}_`);
+      return m.reply(`_Unbonded ${prefix}${boundCommand}_`);
     }
 
     if (command === 'listbond') {
@@ -137,9 +112,9 @@ ${prefix}bond .ping
         return m.reply('_No bonded stickers_');
       }
 
-      let txt = `*BONDED STICKERS*\n\nTotal: ${entries.length}\n\n`;
+      let txt = `*BONDED STICKERS*\n\n_Total: ${entries.length}_\n\n`;
       entries.forEach(([hash, cmd], i) => {
-        txt += `${i + 1}. ${prefix}${cmd}\n`;
+        txt += `${i + 1}. _${prefix}${cmd}_\n`;
       });
 
       return m.reply(txt);
