@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const processedMessages = new Set();
+const messageTimestamps = new Map();
 
 const DATABASE_DIR = path.join(__dirname, 'database');
 if (!fs.existsSync(DATABASE_DIR)) {
@@ -90,6 +91,26 @@ const checkIsSudo = (senderJid, sudoList) => {
   return sudoList.some((entry) => jidMatchesSuffix(senderJid, entry));
 };
 
+const isRateLimited = (sender, chat) => {
+  const key = `${sender}-${chat}`;
+  const now = Date.now();
+  const lastTime = messageTimestamps.get(key) || 0;
+  
+  if (now - lastTime < 1000) {
+    return true;
+  }
+  
+  messageTimestamps.set(key, now);
+  
+  if (messageTimestamps.size > 500) {
+    const entries = Array.from(messageTimestamps.entries());
+    messageTimestamps.clear();
+    entries.slice(-250).forEach(([k, v]) => messageTimestamps.set(k, v));
+  }
+  
+  return false;
+};
+
 const SPECIAL_PREFIX_RE = /^[°•π÷×¶∆£¢€¥®™+✓_=|~!?@()#,'"*+÷/\%^&.©^]/;
 const EMOJI_PREFIX_RE = /^[\uD800-\uDBFF][\uDC00-\uDFFF]/;
 
@@ -152,28 +173,16 @@ class PluginLoader {
   }
 
   async executeCommand(command, sock, m, context) {
-    if (global.disabledCommands.has(command)) {
-      return m.reply('_❌ This command has been disabled by the owner_');
-    }
+    if (global.disabledCommands.has(command)) return;
 
     const plugin = this.commandMap.get(command);
     if (!plugin) return;
 
-    if (plugin.owner === true && !context.isOwner) {
-      return m.reply('_❌ This command is for the owner only_');
-    }
-    if (plugin.sudo === true && !context.isOwner && !context.isSudo) {
-      return m.reply('_❌ This command is for sudo/owner only_');
-    }
-    if (plugin.admin === true && !context.isAdmins && !context.isOwner) {
-      return m.reply('_❌ This command is for group admins only_');
-    }
-    if (plugin.group === true && !context.isGroup) {
-      return m.reply('_❌ This command can only be used in groups_');
-    }
-    if (plugin.private === true && context.isGroup) {
-      return m.reply('_❌ This command can only be used in private chat_');
-    }
+    if (plugin.owner === true && !context.isOwner) return;
+    if (plugin.sudo === true && !context.isOwner && !context.isSudo) return;
+    if (plugin.admin === true && !context.isAdmins && !context.isOwner) return;
+    if (plugin.group === true && !context.isGroup) return;
+    if (plugin.private === true && context.isGroup) return;
 
     try {
       await plugin.execute(sock, m, context);
@@ -218,6 +227,11 @@ module.exports = async (sock, m) => {
       arr.slice(-100).forEach((id) => processedMessages.add(id));
     }
 
+    const senderJid = m.sender || m.key?.participant || m.key?.remoteJid || '';
+    const chatJid = m.chat || m.key?.remoteJid || '';
+
+    if (isRateLimited(senderJid, chatJid)) return;
+
     await pluginLoader.executeAutoReveal(sock, m);
 
     const body =
@@ -227,23 +241,10 @@ module.exports = async (sock, m) => {
       m.message?.imageMessage?.caption ||
       m.message?.videoMessage?.caption ||
       m.message?.extendedTextMessage?.text ||
-      m.message?.buttonsResponseMessage?.selectedButtonId ||
-      m.message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
-      m.message?.templateButtonReplyMessage?.selectedId ||
-      (m.message?.interactiveResponseMessage?.nativeFlowResponseMessage
-        ? (() => {
-            try {
-              return JSON.parse(
-                m.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson
-              ).id;
-            } catch {
-              return '';
-            }
-          })()
-        : '') ||
       '';
 
-    const senderJid = m.sender || m.key?.participant || m.key?.remoteJid || '';
+    if (!body && !m.message?.stickerMessage) return;
+
     const botJid = sock.user?.id || '';
 
     const sudoList = loadSudoList();
@@ -266,7 +267,7 @@ module.exports = async (sock, m) => {
     const getGroupMetadata = async () => {
       if (!m.isGroup || groupMetadata) return;
       try {
-        groupMetadata = await sock.groupMetadata(m.chat || m.key.remoteJid);
+        groupMetadata = await sock.groupMetadata(chatJid);
         participants = groupMetadata.participants || [];
         const admins = participants.filter((p) => p.admin).map((p) => p.id);
         isAdmins = admins.some((id) => jidMatchesSuffix(id, senderJid));
@@ -292,7 +293,7 @@ module.exports = async (sock, m) => {
       isGroup: m.isGroup,
       sender: senderJid,
       senderNum: extractDigits(senderJid),
-      chat: m.chat || m.key?.remoteJid,
+      chat: chatJid,
 
       get prefix() {
         return detectPrefix(body, multiprefix) || getListPrefix()[0] || '.';
@@ -306,7 +307,10 @@ module.exports = async (sock, m) => {
       },
       getGroupMetadata,
 
-      reply: (txt) => m.reply(txt),
+      reply: (txt) => {
+        if (!txt || (typeof txt === 'string' && txt.trim().length === 0)) return Promise.resolve();
+        return m.reply(txt);
+      },
 
       ownerNumbers: sudoList.map(extractDigits),
 
