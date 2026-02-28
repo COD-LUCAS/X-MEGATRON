@@ -9,7 +9,7 @@ const extractTarget = (text) => {
 }
 
 module.exports = {
-  command: ["vvv"],
+  command: ["vv"],
   category: "owner",
   desc: "Reveal view once media (optionally send to jid/lid)",
   usage: ".vv (reply) | .vv @jid/@lid (reply)",
