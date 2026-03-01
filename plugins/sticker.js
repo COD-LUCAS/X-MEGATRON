@@ -1,34 +1,22 @@
 const { Sticker } = require('wa-sticker-formatter');
-const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-
-async function getMediaBuffer(msg) {
-  const type = Object.keys(msg)[0];
-  const stream = await downloadContentFromMessage(
-    msg[type],
-    type.replace('Message', '')
-  );
-  let buffer = Buffer.alloc(0);
-  for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-  return buffer;
-}
 
 function cleanupTempFiles() {
   try {
-    const tempDir = os.tmpdir();
-    const files = fs.readdirSync(tempDir);
+    const tempDir = path.join(__dirname, '..');
+    if (!fs.existsSync(tempDir)) return;
     
+    const files = fs.readdirSync(tempDir);
     for (const file of files) {
-      if (file.startsWith('sticker_') || file.includes('wa-sticker')) {
+      if (file.startsWith('temp_sticker_') || file.includes('.webp.')) {
         try {
           const filePath = path.join(tempDir, file);
           const stats = fs.statSync(filePath);
           const now = Date.now();
           const fileAge = now - stats.mtimeMs;
           
-          if (fileAge > 60000) {
+          if (fileAge > 120000) {
             fs.unlinkSync(filePath);
           }
         } catch (e) {}
@@ -47,31 +35,31 @@ module.exports = {
     try {
       cleanupTempFiles();
 
-      const quotedMsg = m.quoted?.message;
-
-      if (!quotedMsg) {
+      if (!m.quoted) {
         return m.reply('_Reply to image or video_');
       }
 
-      const mime =
-        quotedMsg.imageMessage?.mimetype ||
-        quotedMsg.videoMessage?.mimetype ||
-        '';
+      const quoted = m.quoted;
+      const mtype = quoted.mtype;
 
-      if (!/image|video/.test(mime)) {
+      if (!mtype || (!mtype.includes('image') && !mtype.includes('video'))) {
         return m.reply('_Reply to image or video_');
       }
 
-      if (quotedMsg.videoMessage?.seconds > 10) {
-        return m.reply('_Video must be under 10 seconds_');
+      if (mtype.includes('video')) {
+        const videoMsg = quoted.msg || quoted.message?.videoMessage;
+        if (videoMsg?.seconds > 10) {
+          return m.reply('_Video must be under 10 seconds_');
+        }
       }
 
-      const buffer = await getMediaBuffer(quotedMsg);
-      if (!buffer || !buffer.length) {
+      const buffer = await m.quoted.download();
+      
+      if (!buffer || buffer.length === 0) {
         return m.reply('_Failed to download media_');
       }
 
-      const name = m.sender?.split('@')[0] || 'User';
+      const name = context.senderNum || 'User';
 
       const sticker = new Sticker(buffer, {
         pack: 'X-MEGATRON',
@@ -80,15 +68,19 @@ module.exports = {
         type: 'full'
       });
 
-      const out = await sticker.toBuffer();
+      const stickerBuffer = await sticker.toBuffer();
 
-      await sock.sendMessage(m.chat, { sticker: out }, { quoted: m });
+      await sock.sendMessage(m.chat, { 
+        sticker: stickerBuffer 
+      }, { quoted: m });
 
-      setImmediate(() => {
-        buffer.fill(0);
-        out.fill(0);
-        cleanupTempFiles();
-      });
+      setTimeout(() => {
+        try {
+          if (buffer) buffer.fill(0);
+          if (stickerBuffer) stickerBuffer.fill(0);
+          cleanupTempFiles();
+        } catch (e) {}
+      }, 3000);
 
     } catch (e) {
       return m.reply('_Failed to create sticker_');
