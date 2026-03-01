@@ -149,9 +149,14 @@ const smsg = async (sock, m, store) => {
   }
 
   m.reply = (text, jid = m.chat, opts = {}) => {
-    if (!text || (typeof text === 'string' && text.trim().length === 0)) {
-      return Promise.resolve()
+    if (!text) return Promise.resolve()
+    
+    if (typeof text === 'string') {
+      text = text.trim()
+      if (text.length === 0) return Promise.resolve()
     }
+    
+    if (Buffer.isBuffer(text) && text.length === 0) return Promise.resolve()
     
     return Buffer.isBuffer(text)
       ? sock.sendMessage(jid, { image: text }, { quoted: m, ...opts })
