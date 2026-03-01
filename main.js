@@ -279,6 +279,16 @@ module.exports = async (sock, m) => {
 
     const multiprefix = (process.env.MULTI_PREFIX || 'false').toLowerCase() === 'true';
 
+    const safeReply = (txt) => {
+      if (!txt) return Promise.resolve();
+      if (typeof txt === 'string') {
+        txt = txt.trim();
+        if (txt.length === 0) return Promise.resolve();
+      }
+      if (Buffer.isBuffer(txt) && txt.length === 0) return Promise.resolve();
+      return m.reply(txt);
+    };
+
     const context = {
       command: null,
       args: [],
@@ -307,10 +317,7 @@ module.exports = async (sock, m) => {
       },
       getGroupMetadata,
 
-      reply: (txt) => {
-        if (!txt || (typeof txt === 'string' && txt.trim().length === 0)) return Promise.resolve();
-        return m.reply(txt);
-      },
+      reply: safeReply,
 
       ownerNumbers: sudoList.map(extractDigits),
 
