@@ -2,7 +2,7 @@ const axios = require('axios');
 const { performance } = require('perf_hooks');
 
 module.exports = {
-  command: ['speedtest', 'speed'],
+  command: ['speed'],
   category: 'utility',
   description: 'Test bot and server speed',
 
