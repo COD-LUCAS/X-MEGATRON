@@ -2,7 +2,7 @@ const { performance } = require('perf_hooks');
 const os = require('os');
 
 module.exports = {
-  command: ['status', 'botstatus', 'info'],
+  command: ['status'],
   category: 'info',
   description: 'Show bot system status and performance',
 
