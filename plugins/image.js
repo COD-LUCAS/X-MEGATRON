@@ -1,7 +1,7 @@
 const gis = require('g-i-s')
 
 module.exports = {
-  command: ['img', 'image'],
+  command: ['img'],
   category: 'downloader',
   desc: 'Search and download images from Google',
   usage: '.img <query> | .img <count> <query>',
