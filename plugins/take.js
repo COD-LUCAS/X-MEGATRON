@@ -16,7 +16,7 @@ async function getStickerBuffer(msg) {
 }
 
 module.exports = {
-  command: ["take", "steal"],
+  command: ["take"],
   category: "converter",
   desc: "Change sticker packname and author",
   usage: ".take <packname> or .take <packname>;<author>",
