@@ -32,13 +32,13 @@ const smsg = (sock, m) => {
   if (ctx?.quotedMessage) {
     const qMsg = ctx.quotedMessage
     const qType = getContentType(qMsg)
-    
+
     m.quoted = {
       mtype: qType,
       msg: qMsg[qType],
       message: qMsg,
       sender: jidNormalizedUser(ctx.participant),
-      
+
       download: async () => {
         try {
           const msg = qMsg[qType]
@@ -73,6 +73,15 @@ const smsg = (sock, m) => {
   m.reply = (text) => {
     if (!text || (typeof text === 'string' && !text.trim())) return Promise.resolve()
     
+    // GROUP FIX: Extra validation for groups
+    if (m.isGroup) {
+      if (!text) return Promise.resolve()
+      if (typeof text === 'string') {
+        const t = text.trim()
+        if (!t || t.length === 0) return Promise.resolve()
+      }
+    }
+
     return sock.sendMessage(m.chat, 
       Buffer.isBuffer(text) ? { image: text } : { text: String(text) },
       { quoted: m }
