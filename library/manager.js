@@ -1,6 +1,5 @@
 const {
   jidNormalizedUser,
-  proto,
   getContentType,
   downloadContentFromMessage
 } = require('@whiskeysockets/baileys')
@@ -73,14 +72,7 @@ const smsg = (sock, m) => {
   m.reply = (text) => {
     if (!text || (typeof text === 'string' && !text.trim())) return Promise.resolve()
     
-    // GROUP FIX: Extra validation for groups
-    if (m.isGroup) {
-      if (!text) return Promise.resolve()
-      if (typeof text === 'string') {
-        const t = text.trim()
-        if (!t || t.length === 0) return Promise.resolve()
-      }
-    }
+    if (m.isGroup && (!text || (typeof text === 'string' && !text.trim()))) return Promise.resolve()
 
     return sock.sendMessage(m.chat, 
       Buffer.isBuffer(text) ? { image: text } : { text: String(text) },
