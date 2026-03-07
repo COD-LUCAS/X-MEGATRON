@@ -83,4 +83,38 @@ const smsg = (sock, m) => {
   return m
 }
 
-module.exports = { smsg }
+const wrapSock = (sock) => {
+  const originalSendMessage = sock.sendMessage.bind(sock)
+  
+  sock.sendMessage = async (jid, content, options = {}) => {
+    if (!content) return null
+    
+    const isGroup = jid.endsWith('@g.us')
+    
+    if (content.text !== undefined) {
+      if (!content.text || (typeof content.text === 'string' && !content.text.trim())) {
+        return null
+      }
+      
+      if (isGroup && (!content.text || content.text.trim().length === 0)) {
+        return null
+      }
+    }
+    
+    if (content.caption !== undefined) {
+      if (!content.caption || (typeof content.caption === 'string' && !content.caption.trim())) {
+        delete content.caption
+      }
+    }
+    
+    try {
+      return await originalSendMessage(jid, content, options)
+    } catch (e) {
+      return null
+    }
+  }
+  
+  return sock
+}
+
+module.exports = { smsg, wrapSock }
