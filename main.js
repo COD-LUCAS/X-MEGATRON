@@ -4,7 +4,6 @@ const config = require('./config');
 const fs = require('fs');
 const path = require('path');
 
-const processed = new Set();
 const DATABASE_DIR = path.join(__dirname, 'database');
 
 if (!fs.existsSync(DATABASE_DIR)) {
@@ -115,176 +114,156 @@ class Loader {
     if (p.group && !m.isGroup) return;
     if (p.private && m.isGroup) return;
 
-    try {
-      p.execute(sock, m, ctx);
-    } catch (e) {}
+    p.execute(sock, m, ctx);
   }
 
   onText(sock, m, ctx) {
     for (const p of this.plugins) {
       if (!p.onText) continue;
-      try {
-        p.execute(sock, m, ctx);
-      } catch (e) {}
+      p.execute(sock, m, ctx);
     }
   }
 
   autoReveal(sock, m) {
     for (const p of this.plugins) {
       if (!p.autoReveal) continue;
-      try {
-        p.autoReveal(sock, m);
-      } catch (e) {}
+      p.autoReveal(sock, m);
     }
   }
 }
 
 const loader = new Loader();
-
-let groupMetaCache = new Map();
+const groupMetaCache = new Map();
 
 module.exports = (sock, m) => {
-  try {
-    if (!m?.key?.id || !m.message) return;
-    if (m.key.remoteJid === 'status@broadcast') return;
+  if (!m?.key?.id || !m.message) return;
+  if (m.key.remoteJid === 'status@broadcast') return;
 
-    if (processed.has(m.key.id)) return;
-    processed.add(m.key.id);
-    if (processed.size > 50) {
-      const arr = [...processed].slice(-25);
-      processed.clear();
-      arr.forEach(id => processed.add(id));
+  const body = m.body || '';
+  const sender = m.sender || '';
+
+  if (!sender) return;
+
+  const sudoList = loadSudo();
+  const isOwner = m.fromMe || isSudo(sender, sudoList);
+  const isSudoUser = !m.fromMe && isSudo(sender, sudoList);
+
+  const mode = (process.env.MODE || 'public').toLowerCase();
+  if (mode === 'private' && !isOwner) return;
+  if (mode === 'group' && !m.isGroup && !isOwner) return;
+  if (mode === 'pm' && m.isGroup && !isOwner) return;
+
+  let meta = null;
+  let isAdmin = false;
+  let isBotAdmin = false;
+
+  if (m.isGroup) {
+    meta = groupMetaCache.get(m.chat);
+    
+    if (meta) {
+      const admins = meta.participants.filter(p => p.admin).map(p => p.id);
+      const sNum = sender.split('@')[0];
+      const bNum = sock.user.id.split(':')[0];
+      isAdmin = admins.some(a => a.split('@')[0].endsWith(sNum.slice(-10)));
+      isBotAdmin = admins.some(a => a.split('@')[0].endsWith(bNum.slice(-10)));
     }
+  }
 
-    const body = m.body || '';
-    const sender = m.sender || '';
-
-    if (!sender) return;
-
-    const sudoList = loadSudo();
-    const isOwner = m.fromMe || isSudo(sender, sudoList);
-    const isSudoUser = !m.fromMe && isSudo(sender, sudoList);
-
-    const mode = (process.env.MODE || 'public').toLowerCase();
-    if (mode === 'private' && !isOwner) return;
-    if (mode === 'group' && !m.isGroup && !isOwner) return;
-    if (mode === 'pm' && m.isGroup && !isOwner) return;
-
-    let meta = null;
-    let isAdmin = false;
-    let isBotAdmin = false;
-
-    if (m.isGroup) {
-      if (groupMetaCache.has(m.chat)) {
-        meta = groupMetaCache.get(m.chat);
+  const getMeta = async () => {
+    if (!m.isGroup || meta) return;
+    try {
+      meta = await sock.groupMetadata(m.chat);
+      groupMetaCache.set(m.chat, meta);
+      if (groupMetaCache.size > 30) {
+        const first = groupMetaCache.keys().next().value;
+        groupMetaCache.delete(first);
       }
       
-      if (meta) {
-        const admins = meta.participants.filter(p => p.admin).map(p => p.id);
-        const sNum = sender.split('@')[0];
-        const bNum = sock.user.id.split(':')[0];
-        isAdmin = admins.some(a => a.split('@')[0].endsWith(sNum.slice(-10)));
-        isBotAdmin = admins.some(a => a.split('@')[0].endsWith(bNum.slice(-10)));
-      }
+      const admins = meta.participants.filter(p => p.admin).map(p => p.id);
+      const sNum = sender.split('@')[0];
+      const bNum = sock.user.id.split(':')[0];
+      isAdmin = admins.some(a => a.split('@')[0].endsWith(sNum.slice(-10)));
+      isBotAdmin = admins.some(a => a.split('@')[0].endsWith(bNum.slice(-10)));
+    } catch (e) {}
+  };
+
+  const ctx = {
+    command: null,
+    args: [],
+    text: body,
+    prefix: getPrefix(body) || prefixes[0],
+
+    isOwner,
+    isSudo: isSudoUser,
+    isCreator: m.fromMe,
+    isAdmin,
+    isBotAdmin,
+
+    isGroup: m.isGroup,
+    sender,
+    senderNum: sender.split('@')[0].replace(/\D/g, ''),
+    chat: m.chat,
+
+    participants: meta?.participants || [],
+    groupMetadata: meta,
+    getGroupMetadata: getMeta,
+
+    reply: (txt) => {
+      if (!txt || (typeof txt === 'string' && !txt.trim())) return Promise.resolve();
+      if (m.isGroup && (!txt || (typeof txt === 'string' && !txt.trim()))) return Promise.resolve();
+      return m.reply(txt);
+    },
+
+    ownerNumbers: sudoList,
+    config
+  };
+
+  loader.autoReveal(sock, m);
+
+  if (m.message?.stickerMessage) {
+    let hash = null;
+
+    if (m.message.stickerMessage.fileSha256) {
+      hash = m.message.stickerMessage.fileSha256.toString('base64');
+    } else if (m.msg?.fileSha256) {
+      hash = m.msg.fileSha256.toString('base64');
     }
 
-    const getMeta = async () => {
-      if (!m.isGroup || meta) return;
-      try {
-        meta = await sock.groupMetadata(m.chat);
-        groupMetaCache.set(m.chat, meta);
-        if (groupMetaCache.size > 20) {
-          const first = groupMetaCache.keys().next().value;
-          groupMetaCache.delete(first);
+    if (hash) {
+      const bonds = readBonds();
+      if (bonds[hash]) {
+        const parts = bonds[hash].trim().split(/\s+/);
+        const cmd = parts[0].toLowerCase();
+
+        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
+          if (!m.quoted) m.quoted = {};
+          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
         }
-        
-        const admins = meta.participants.filter(p => p.admin).map(p => p.id);
-        const sNum = sender.split('@')[0];
-        const bNum = sock.user.id.split(':')[0];
-        isAdmin = admins.some(a => a.split('@')[0].endsWith(sNum.slice(-10)));
-        isBotAdmin = admins.some(a => a.split('@')[0].endsWith(bNum.slice(-10)));
-      } catch (e) {}
-    };
 
-    const ctx = {
-      command: null,
-      args: [],
-      text: body,
-      prefix: getPrefix(body) || prefixes[0],
+        ctx.command = cmd;
+        ctx.args = parts.slice(1);
+        ctx.text = parts.slice(1).join(' ');
 
-      isOwner,
-      isSudo: isSudoUser,
-      isCreator: m.fromMe,
-      isAdmin,
-      isBotAdmin,
-
-      isGroup: m.isGroup,
-      sender,
-      senderNum: sender.split('@')[0].replace(/\D/g, ''),
-      chat: m.chat,
-
-      participants: meta?.participants || [],
-      groupMetadata: meta,
-      getGroupMetadata: getMeta,
-
-      reply: (txt) => {
-        if (!txt || (typeof txt === 'string' && !txt.trim())) return Promise.resolve();
-        if (m.isGroup && (!txt || (typeof txt === 'string' && !txt.trim()))) return Promise.resolve();
-        return m.reply(txt);
-      },
-
-      ownerNumbers: sudoList,
-      config
-    };
-
-    loader.autoReveal(sock, m);
-
-    if (m.message?.stickerMessage) {
-      let hash = null;
-
-      if (m.message.stickerMessage.fileSha256) {
-        hash = m.message.stickerMessage.fileSha256.toString('base64');
-      } else if (m.msg?.fileSha256) {
-        hash = m.msg.fileSha256.toString('base64');
-      }
-
-      if (hash) {
-        const bonds = readBonds();
-        if (bonds[hash]) {
-          const parts = bonds[hash].trim().split(/\s+/);
-          const cmd = parts[0].toLowerCase();
-
-          if (m.message.stickerMessage.contextInfo?.quotedMessage) {
-            if (!m.quoted) m.quoted = {};
-            m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
-          }
-
-          ctx.command = cmd;
-          ctx.args = parts.slice(1);
-          ctx.text = parts.slice(1).join(' ');
-
-          return loader.exec(cmd, sock, m, ctx);
-        }
+        return loader.exec(cmd, sock, m, ctx);
       }
     }
+  }
 
-    if (!body || !body.trim()) return;
+  if (!body || !body.trim()) return;
 
-    const pre = getPrefix(body);
-    if (!pre) {
-      loader.onText(sock, m, ctx);
-      return;
-    }
+  const pre = getPrefix(body);
+  if (!pre) {
+    loader.onText(sock, m, ctx);
+    return;
+  }
 
-    const parts = body.slice(pre.length).trim().split(/\s+/);
-    const cmd = parts[0]?.toLowerCase();
-    if (!cmd) return;
+  const parts = body.slice(pre.length).trim().split(/\s+/);
+  const cmd = parts[0]?.toLowerCase();
+  if (!cmd) return;
 
-    ctx.command = cmd;
-    ctx.args = parts.slice(1);
-    ctx.text = parts.slice(1).join(' ');
+  ctx.command = cmd;
+  ctx.args = parts.slice(1);
+  ctx.text = parts.slice(1).join(' ');
 
-    loader.exec(cmd, sock, m, ctx);
-
-  } catch (e) {}
+  loader.exec(cmd, sock, m, ctx);
 };
