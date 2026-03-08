@@ -71,18 +71,8 @@ const smsg = (sock, m) => {
 
   m.reply = (text) => {
     if (!text) return Promise.resolve()
-    
-    if (typeof text === 'string') {
-      text = text.trim()
-      if (text.length === 0) return Promise.resolve()
-    }
-    
-    if (Buffer.isBuffer(text) && text.length === 0) return Promise.resolve()
-    
-    if (m.isGroup) {
-      if (!text) return Promise.resolve()
-      if (typeof text === 'string' && text.trim().length === 0) return Promise.resolve()
-    }
+    if (typeof text === 'string' && !text.trim()) return Promise.resolve()
+    if (m.isGroup && (!text || (typeof text === 'string' && !text.trim()))) return Promise.resolve()
 
     return sock.sendMessage(m.chat, 
       Buffer.isBuffer(text) ? { image: text } : { text: String(text) },
