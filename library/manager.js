@@ -70,9 +70,19 @@ const smsg = (sock, m) => {
   }
 
   m.reply = (text) => {
-    if (!text || (typeof text === 'string' && !text.trim())) return Promise.resolve()
+    if (!text) return Promise.resolve()
     
-    if (m.isGroup && (!text || (typeof text === 'string' && !text.trim()))) return Promise.resolve()
+    if (typeof text === 'string') {
+      text = text.trim()
+      if (text.length === 0) return Promise.resolve()
+    }
+    
+    if (Buffer.isBuffer(text) && text.length === 0) return Promise.resolve()
+    
+    if (m.isGroup) {
+      if (!text) return Promise.resolve()
+      if (typeof text === 'string' && text.trim().length === 0) return Promise.resolve()
+    }
 
     return sock.sendMessage(m.chat, 
       Buffer.isBuffer(text) ? { image: text } : { text: String(text) },
@@ -83,38 +93,4 @@ const smsg = (sock, m) => {
   return m
 }
 
-const wrapSock = (sock) => {
-  const originalSendMessage = sock.sendMessage.bind(sock)
-  
-  sock.sendMessage = async (jid, content, options = {}) => {
-    if (!content) return null
-    
-    const isGroup = jid.endsWith('@g.us')
-    
-    if (content.text !== undefined) {
-      if (!content.text || (typeof content.text === 'string' && !content.text.trim())) {
-        return null
-      }
-      
-      if (isGroup && (!content.text || content.text.trim().length === 0)) {
-        return null
-      }
-    }
-    
-    if (content.caption !== undefined) {
-      if (!content.caption || (typeof content.caption === 'string' && !content.caption.trim())) {
-        delete content.caption
-      }
-    }
-    
-    try {
-      return await originalSendMessage(jid, content, options)
-    } catch (e) {
-      return null
-    }
-  }
-  
-  return sock
-}
-
-module.exports = { smsg, wrapSock }
+module.exports = { smsg }
