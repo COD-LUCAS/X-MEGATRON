@@ -6,14 +6,10 @@ module.exports = {
   group: true,
 
   async execute(sock, m, context) {
-    const { command, isOwner, isAdmin, isBotAdmin } = context;
+    const { command, isOwner, isAdmin } = context;
 
     if (!isOwner && !isAdmin) {
       return;
-    }
-
-    if (!isBotAdmin) {
-      return m.reply('_Bot must be admin_');
     }
 
     let target = null;
@@ -47,7 +43,7 @@ module.exports = {
       }, { quoted: m });
 
     } catch (e) {
-      return m.reply(`_Failed to ${command}_`);
+      return m.reply('_Bot is not admin_');
     }
   }
 };
