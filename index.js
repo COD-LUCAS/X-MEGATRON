@@ -2,8 +2,10 @@ require('./library/console');
 require('dotenv').config();
 
 const config = () => require('./config');
+
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 const log = require('./library/console');
 
 let makeWASocket, Browsers, useMultiFileAuthState,
@@ -19,8 +21,41 @@ const loadBaileys = async () => {
   jidDecode = b.jidDecode;
 };
 
+const SESSION_BACKUP = './library/session.json';
+
 process.on('uncaughtException', () => {});
 process.on('unhandledRejection', () => {});
+
+const initSession = async (sessionDir) => {
+  if (!fs.existsSync('./library')) {
+    fs.mkdirSync('./library', { recursive: true });
+  }
+
+  let saved = {};
+  if (fs.existsSync(SESSION_BACKUP)) {
+    try {
+      saved = JSON.parse(fs.readFileSync(SESSION_BACKUP, 'utf8'));
+    } catch (e) {}
+  }
+
+  const envSession = process.env.SESSION_ID;
+  if (!envSession || envSession.trim().length === 0) {
+    log.error('SESSION_ID missing or empty in .env');
+    process.exit(1);
+  }
+
+  if (saved.SESSION_ID && saved.SESSION_ID !== envSession) {
+    if (fs.existsSync(sessionDir)) {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
+  }
+
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
+
+  fs.writeFileSync(SESSION_BACKUP, JSON.stringify({ SESSION_ID: envSession }, null, 2));
+};
 
 const clientstart = async () => {
   try {
@@ -30,8 +65,41 @@ const clientstart = async () => {
     log.success('Dependencies loaded');
 
     const sessionDir = `./${config().session}`;
+    const sessionFile = `${sessionDir}/creds.json`;
 
     log.info('Initializing session');
+    await initSession(sessionDir);
+
+    if (!fs.existsSync(sessionFile)) {
+      log.info('Downloading session from Database');
+
+      const sessionId = process.env.SESSION_ID;
+      if (!sessionId.includes('~')) {
+        log.error('Invalid SESSION_ID.');
+        process.exit(1);
+      }
+
+      const code = sessionId.split('~').pop().trim();
+      if (!code) {
+        log.error('Invalid SESSION_ID');
+        process.exit(1);
+      }
+
+      try {
+        const res = await axios.get(`https://pastebin.com/raw/${code}`, { timeout: 10000 });
+        if (!res.data || typeof res.data !== 'object') {
+          log.error('Invalid session data');
+          process.exit(1);
+        }
+        fs.writeFileSync(sessionFile, JSON.stringify(res.data, null, 2));
+        log.success('Session downloaded successfully');
+      } catch (error) {
+        log.error('Failed to download session:', error.message);
+        process.exit(1);
+      }
+    }
+
+    log.success('Session initialized');
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     const { version } = await fetchLatestBaileysVersion();
@@ -47,9 +115,6 @@ const clientstart = async () => {
       getMessage: async () => ({ conversation: '' })
     });
 
-    const { wrapSock } = require('./library/manager');
-    wrapSock(sock);
-
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
@@ -61,11 +126,27 @@ const clientstart = async () => {
         try {
           const updater = require('./plugins/updater');
           if (updater.init) {
-            const owners = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean);
-            if (owners.length > 0) {
-              updater.init(sock, owners);
+            const ownerFromEnv = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean);
+            const ownerFromFile = [];
+            try {
+              const ownerFile = path.join(__dirname, 'owner.json');
+              if (fs.existsSync(ownerFile)) {
+                const raw = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+                if (Array.isArray(raw)) ownerFromFile.push(...raw);
+              }
+            } catch (e) {}
+
+            const allOwners = [...ownerFromEnv, ...ownerFromFile];
+            if (allOwners.length > 0) {
+              updater.init(sock, allOwners);
               log.success('Update checker started');
             }
+          }
+        } catch (e) {}
+
+        try {
+          if (fs.existsSync('./plugins/startup.js')) {
+            require('./plugins/startup').execute(sock);
           }
         } catch (e) {}
       }
@@ -73,16 +154,11 @@ const clientstart = async () => {
       if (connection === 'close') {
         const code = lastDisconnect?.error?.output?.statusCode;
 
-        if (code === DisconnectReason.loggedOut) {
-          log.error('Logged out - session expired');
-          log.error('Generate new SESSION_ID');
-          if (fs.existsSync(sessionDir)) {
-            fs.rmSync(sessionDir, { recursive: true, force: true });
-          }
-          process.exit(1);
-        } else {
-          log.warn('Connection closed, reconnecting in 5s');
+        if (code !== DisconnectReason.loggedOut) {
           setTimeout(clientstart, 5000);
+        } else {
+          log.error('Logged out, please get new SESSION_ID');
+          process.exit(1);
         }
       }
     });
@@ -96,7 +172,7 @@ const clientstart = async () => {
         mek.message = mek.message.ephemeralMessage?.message || mek.message;
 
         const { smsg } = require('./library/manager');
-        const m = smsg(sock, mek);
+        const m = await smsg(sock, mek);
         require('./main')(sock, m);
       } catch (e) {}
     });
@@ -110,10 +186,9 @@ const clientstart = async () => {
     };
 
   } catch (error) {
-    log.error('Fatal error: ' + error.message);
-    console.error(error);
+    log.error('Fatal error:', error.message);
     process.exit(1);
   }
 };
 
-clientstart(); 
+clientstart();
