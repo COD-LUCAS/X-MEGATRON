@@ -1,44 +1,53 @@
 module.exports = {
-  command: ['promote'],
+  command: ['promote', 'demote'],
   category: 'group',
-  desc: 'Promote user to admin',
-  usage: '.promote @user or reply to user',
+  desc: 'Promote or demote users',
+  usage: '.promote @user or reply / .demote @user or reply',
   group: true,
 
   async execute(sock, m, context) {
-    if (!context.isOwner && !context.isAdmin) {
+    const { command, isOwner, isAdmin, isBotAdmin } = context;
+
+    if (!isOwner && !isAdmin) {
       return;
     }
 
-    if (!context.isBotAdmin) {
-      return m.reply('_Make me admin first_');
+    if (!isBotAdmin) {
+      return m.reply('_Bot must be admin_');
     }
 
     let target = null;
 
     if (m.quoted) {
       target = m.quoted.sender;
-    } else if (context.text) {
-      const mentioned = m.message?.extendedTextMessage?.contextInfo?.mentionedJid;
+    } else if (m.message?.extendedTextMessage?.contextInfo?.mentionedJid) {
+      const mentioned = m.message.extendedTextMessage.contextInfo.mentionedJid;
       if (mentioned && mentioned.length > 0) {
         target = mentioned[0];
       }
     }
 
     if (!target) {
-      return m.reply('_Reply to user or mention @user_');
+      return m.reply('_Tag or reply to user_');
     }
 
     try {
-      await sock.groupParticipantsUpdate(
-        m.chat,
-        [target],
-        'promote'
-      );
+      const action = command === 'promote' ? 'promote' : 'demote';
+      
+      await sock.groupParticipantsUpdate(m.chat, [target], action);
 
-      return m.reply('_Promoted to admin_');
+      const targetNum = target.split('@')[0];
+      const text = command === 'promote' 
+        ? `_@${targetNum} promoted to admin_`
+        : `_@${targetNum} demoted to member_`;
+
+      return sock.sendMessage(m.chat, {
+        text: text,
+        mentions: [target]
+      }, { quoted: m });
+
     } catch (e) {
-      return m.reply('_Failed to promote_');
+      return m.reply(`_Failed to ${command}_`);
     }
   }
 };
