@@ -54,7 +54,7 @@ module.exports = {
 
       if (!target || !extractDigits(target)) {
         return m.reply(
-          `_Mention or provide a number!_\n\nExample:\n${prefix}setsudo @tag\n${prefix}setsudo 62xxx`
+          `_Mention or provide a number!_\n\nExample:\n${prefix}setsudo @tag\n${prefix}setsudo 91xxx`
         );
       }
 
