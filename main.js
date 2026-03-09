@@ -120,7 +120,11 @@ class Loader {
   onText(sock, m, ctx) {
     for (const p of this.plugins) {
       if (!p.onText) continue;
-      p.execute(sock, m, ctx);
+      if (p.handleText) {
+        p.handleText(sock, m, ctx);
+      } else {
+        p.execute(sock, m, ctx);
+      }
     }
   }
 
