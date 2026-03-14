@@ -18,20 +18,20 @@ const readPluginDB = () => {
   ensureDir();
   const content = fs.readFileSync(EXT_PLUGINS_DB, 'utf8');
   return content.split('\n').filter(line => line.trim().length > 0).map(line => {
-    const [name, url] = line.split('|');
-    return { name, url };
+    const [name, url, filename] = line.split('|');
+    return { name, url, filename };
   });
 };
 
-const addPluginDB = (name, url) => {
+const addPluginDB = (name, url, filename) => {
   ensureDir();
-  fs.appendFileSync(EXT_PLUGINS_DB, `${name}|${url}\n`);
+  fs.appendFileSync(EXT_PLUGINS_DB, `${name}|${url}|${filename}\n`);
 };
 
 const removePluginDB = (name) => {
   ensureDir();
   const plugins = readPluginDB().filter(p => p.name !== name);
-  fs.writeFileSync(EXT_PLUGINS_DB, plugins.map(p => `${p.name}|${p.url}`).join('\n') + '\n');
+  fs.writeFileSync(EXT_PLUGINS_DB, plugins.map(p => `${p.name}|${p.url}|${p.filename}`).join('\n') + (plugins.length > 0 ? '\n' : ''));
 };
 
 const downloadPlugin = async (url) => {
@@ -61,10 +61,6 @@ const validatePlugin = (code) => {
       return { valid: false, error: 'Missing module.exports' };
     }
 
-    if (!code.includes('command:')) {
-      return { valid: false, error: 'Missing command field' };
-    }
-
     if (!code.includes('execute')) {
       return { valid: false, error: 'Missing execute function' };
     }
@@ -75,15 +71,23 @@ const validatePlugin = (code) => {
 
     const plugin = tempModule.exports;
 
-    if (!plugin.command) {
-      return { valid: false, error: 'Invalid command field' };
-    }
-
     if (typeof plugin.execute !== 'function') {
       return { valid: false, error: 'execute must be a function' };
     }
 
-    const commands = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
+    // Check if it's an onText plugin (no command needed) or regular plugin (needs command)
+    if (!plugin.onText && !plugin.command) {
+      return { valid: false, error: 'Missing command field (or set onText: true)' };
+    }
+
+    // If it has commands, extract them
+    let commands = [];
+    if (plugin.command) {
+      commands = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
+    } else if (plugin.onText) {
+      // For onText plugins, use a descriptive name
+      commands = ['auto-listener'];
+    }
 
     return { valid: true, commands, plugin };
 
@@ -108,10 +112,10 @@ const extractFilename = (url) => {
 };
 
 module.exports = {
-  command: ['install', 'plugins', 'remove', 'plugin'],
+  command: ['install', 'plugins', 'remove', 'plugin', 'gistupdate'],
   category: 'owner',
   desc: 'Install, list, and manage external plugins',
-  usage: '.install <url> / .plugins / .remove <name> / .plugin <name>',
+  usage: '.install <url> / .plugins / .remove <name> / .plugin <name> / .gistupdate <name>',
   owner: true,
 
   async execute(sock, m, context) {
@@ -148,10 +152,10 @@ module.exports = {
         fs.writeFileSync(pluginPath, code, 'utf8');
 
         const commandNames = validation.commands.join(', ');
-        addPluginDB(commandNames, url);
+        addPluginDB(commandNames, url, filename);
 
         await sock.sendMessage(m.chat, {
-          text: `_✅ Installed: ${commandNames}_\n\n_Saved to database/external_plugins/_\n_Restart to load plugin_`,
+          text: `_✅ Installed: ${commandNames}_\n\n_File: ${filename}_\n_Saved to database/external_plugins/_\n_Restart to load plugin_`,
           edit: statusMsg.key
         });
 
@@ -172,7 +176,7 @@ module.exports = {
 
       let list = '*📦 EXTERNAL PLUGINS*\n\n';
       plugins.forEach((p, i) => {
-        list += `${i + 1}. *${p.name}*\n${p.url}\n\n`;
+        list += `${i + 1}. *${p.name}*\n_File: ${p.filename}_\n${p.url}\n\n`;
       });
 
       return m.reply(list);
@@ -189,11 +193,10 @@ module.exports = {
       const plugin = plugins.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
 
       if (!plugin) {
-        return m.reply('_Plugin not found_');
+        return m.reply('_Plugin not found_\n\n_Use .plugins to see installed plugins_');
       }
 
-      const filename = extractFilename(plugin.url);
-      const pluginPath = path.join(EXT_PLUGINS_DIR, filename);
+      const pluginPath = path.join(EXT_PLUGINS_DIR, plugin.filename);
 
       if (fs.existsSync(pluginPath)) {
         fs.unlinkSync(pluginPath);
@@ -201,7 +204,7 @@ module.exports = {
 
       removePluginDB(plugin.name);
 
-      return m.reply(`_✅ Removed: ${plugin.name}_\n\n_Deleted from database/external_plugins/_\n_Restart to unload_`);
+      return m.reply(`_✅ Removed: ${plugin.name}_\n\n_File deleted: ${plugin.filename}_\n_Removed from database_\n_Restart to unload_`);
     }
 
     if (command === 'plugin') {
@@ -218,7 +221,66 @@ module.exports = {
         return m.reply('_Plugin not found_');
       }
 
-      return m.reply(`*Plugin:* ${plugin.name}\n\n*URL:*\n${plugin.url}`);
+      return m.reply(`*Plugin:* ${plugin.name}\n*File:* ${plugin.filename}\n\n*URL:*\n${plugin.url}`);
+    }
+
+    if (command === 'gistupdate') {
+      if (!text) {
+        return m.reply('_Give me plugin name to update_\n\n_Example:_\n.gistupdate ytdl');
+      }
+
+      const name = text.trim();
+      const plugins = readPluginDB();
+
+      const plugin = plugins.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
+
+      if (!plugin) {
+        return m.reply('_Plugin not found_\n\n_Use .plugins to see installed plugins_');
+      }
+
+      const statusMsg = await m.reply(`_🔄 Updating ${plugin.name}..._`);
+
+      try {
+        const code = await downloadPlugin(plugin.url);
+
+        await sock.sendMessage(m.chat, {
+          text: '_🔍 Validating updated plugin..._',
+          edit: statusMsg.key
+        });
+
+        const validation = validatePlugin(code);
+
+        if (!validation.valid) {
+          return sock.sendMessage(m.chat, {
+            text: `_❌ Update failed_\n\n*Error:* ${validation.error}\n\n_New version doesn't match X-MEGATRON framework_`,
+            edit: statusMsg.key
+          });
+        }
+
+        const pluginPath = path.join(EXT_PLUGINS_DIR, plugin.filename);
+
+        if (fs.existsSync(pluginPath)) {
+          fs.unlinkSync(pluginPath);
+        }
+
+        fs.writeFileSync(pluginPath, code, 'utf8');
+
+        const commandNames = validation.commands.join(', ');
+
+        removePluginDB(plugin.name);
+        addPluginDB(commandNames, plugin.url, plugin.filename);
+
+        await sock.sendMessage(m.chat, {
+          text: `_✅ Updated: ${commandNames}_\n\n_Old: ${plugin.name}_\n_New: ${commandNames}_\n_File: ${plugin.filename}_\n\n_Restart to reload plugin_`,
+          edit: statusMsg.key
+        });
+
+      } catch (e) {
+        await sock.sendMessage(m.chat, {
+          text: `_❌ Update failed_\n\n_${e.message}_`,
+          edit: statusMsg.key
+        });
+      }
     }
   }
 };
