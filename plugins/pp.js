@@ -1,7 +1,7 @@
 module.exports = {
   command: ['pp', 'gpp'],
   category: 'owner',
-  desc: 'Change/Get profile picture or group icon (full screen)',
+  desc: 'Change profile picture or group dp',
   usage: '.pp (reply to image) or .pp (reply to user) / .gpp (reply to image)',
   owner: true,
 
