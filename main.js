@@ -102,13 +102,20 @@ class Loader {
         try {
           delete require.cache[require.resolve(path.join(dir, file))];
           const p = require(path.join(dir, file));
-          if (!p?.command) continue;
+          
+          // FIXED: Load plugins with command OR onText
+          if (!p?.command && !p?.onText) continue;
 
           this.plugins.push(p);
 
-          const cmds = Array.isArray(p.command) ? p.command : [p.command];
-          cmds.forEach(c => this.map.set(c.toLowerCase(), p));
-        } catch (e) {}
+          // Only add to map if it has commands
+          if (p.command) {
+            const cmds = Array.isArray(p.command) ? p.command : [p.command];
+            cmds.forEach(c => this.map.set(c.toLowerCase(), p));
+          }
+        } catch (e) {
+          console.log(`Failed to load ${file}:`, e.message);
+        }
       }
     }
   }
@@ -150,7 +157,7 @@ class Loader {
 const loader = new Loader();
 const groupMetaCache = new Map();
 
-module.exports = (sock, m) => {
+module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
   if (m.key.remoteJid === 'status@broadcast') return;
 
@@ -172,8 +179,36 @@ module.exports = (sock, m) => {
   let isAdmin = false;
   let isBotAdmin = false;
 
+  // FIXED: Fetch metadata immediately for groups
+  if (m.isGroup) {
+    if (groupMetaCache.has(m.chat)) {
+      meta = groupMetaCache.get(m.chat);
+    } else {
+      try {
+        meta = await sock.groupMetadata(m.chat);
+        groupMetaCache.set(m.chat, meta);
+        if (groupMetaCache.size > 30) {
+          const first = groupMetaCache.keys().next().value;
+          groupMetaCache.delete(first);
+        }
+      } catch (e) {}
+    }
+
+    if (meta) {
+      const admins = meta.participants
+        .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
+        .map(p => p.id);
+      
+      const sNum = sender.split('@')[0];
+      const bNum = sock.user.id.split(':')[0];
+      
+      isAdmin = admins.some(a => a.split('@')[0] === sNum);
+      isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
+    }
+  }
+
   const getMeta = async () => {
-    if (!m.isGroup) return;
+    if (!m.isGroup || meta) return;
     
     try {
       meta = await sock.groupMetadata(m.chat);
@@ -183,7 +218,10 @@ module.exports = (sock, m) => {
         groupMetaCache.delete(first);
       }
       
-      const admins = meta.participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin').map(p => p.id);
+      const admins = meta.participants
+        .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
+        .map(p => p.id);
+      
       const sNum = sender.split('@')[0];
       const bNum = sock.user.id.split(':')[0];
       
