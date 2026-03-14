@@ -5,9 +5,14 @@ const fs = require('fs');
 const path = require('path');
 
 const DATABASE_DIR = path.join(__dirname, 'database');
+const EXT_PLUGINS_DIR = path.join(DATABASE_DIR, 'external_plugins');
 
 if (!fs.existsSync(DATABASE_DIR)) {
   fs.mkdirSync(DATABASE_DIR, { recursive: true });
+}
+
+if (!fs.existsSync(EXT_PLUGINS_DIR)) {
+  fs.mkdirSync(EXT_PLUGINS_DIR, { recursive: true });
 }
 
 global.disabledCommands = global.disabledCommands || new Set();
@@ -83,22 +88,28 @@ class Loader {
   }
 
   load() {
-    const dir = path.join(__dirname, 'plugins');
-    if (!fs.existsSync(dir)) return;
+    const pluginsDirs = [
+      path.join(__dirname, 'plugins'),
+      EXT_PLUGINS_DIR
+    ];
 
-    const files = fs.readdirSync(dir).filter(f => f.endsWith('.js'));
+    for (const dir of pluginsDirs) {
+      if (!fs.existsSync(dir)) continue;
 
-    for (const file of files) {
-      try {
-        delete require.cache[require.resolve(path.join(dir, file))];
-        const p = require(path.join(dir, file));
-        if (!p?.command) continue;
+      const files = fs.readdirSync(dir).filter(f => f.endsWith('.js'));
 
-        this.plugins.push(p);
+      for (const file of files) {
+        try {
+          delete require.cache[require.resolve(path.join(dir, file))];
+          const p = require(path.join(dir, file));
+          if (!p?.command) continue;
 
-        const cmds = Array.isArray(p.command) ? p.command : [p.command];
-        cmds.forEach(c => this.map.set(c.toLowerCase(), p));
-      } catch (e) {}
+          this.plugins.push(p);
+
+          const cmds = Array.isArray(p.command) ? p.command : [p.command];
+          cmds.forEach(c => this.map.set(c.toLowerCase(), p));
+        } catch (e) {}
+      }
     }
   }
 
@@ -161,20 +172,9 @@ module.exports = (sock, m) => {
   let isAdmin = false;
   let isBotAdmin = false;
 
-  if (m.isGroup) {
-    meta = groupMetaCache.get(m.chat);
-    
-    if (meta) {
-      const admins = meta.participants.filter(p => p.admin).map(p => p.id);
-      const sNum = sender.split('@')[0];
-      const bNum = sock.user.id.split(':')[0];
-      isAdmin = admins.some(a => a.split('@')[0].endsWith(sNum.slice(-10)));
-      isBotAdmin = admins.some(a => a.split('@')[0].endsWith(bNum.slice(-10)));
-    }
-  }
-
   const getMeta = async () => {
-    if (!m.isGroup || meta) return;
+    if (!m.isGroup) return;
+    
     try {
       meta = await sock.groupMetadata(m.chat);
       groupMetaCache.set(m.chat, meta);
@@ -183,11 +183,12 @@ module.exports = (sock, m) => {
         groupMetaCache.delete(first);
       }
       
-      const admins = meta.participants.filter(p => p.admin).map(p => p.id);
+      const admins = meta.participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin').map(p => p.id);
       const sNum = sender.split('@')[0];
       const bNum = sock.user.id.split(':')[0];
-      isAdmin = admins.some(a => a.split('@')[0].endsWith(sNum.slice(-10)));
-      isBotAdmin = admins.some(a => a.split('@')[0].endsWith(bNum.slice(-10)));
+      
+      isAdmin = admins.some(a => a.split('@')[0] === sNum);
+      isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
     } catch (e) {}
   };
 
