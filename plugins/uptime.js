@@ -17,7 +17,7 @@ function formatUptime(seconds) {
 
 module.exports = {
   command: ['uptime', 'runtime'],
-  category: 'main',
+  category: 'utility',
   desc: 'Show bot and system uptime',
   usage: '.uptime',
 
