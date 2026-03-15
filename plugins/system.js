@@ -5,6 +5,7 @@ module.exports = {
   command: ['reboot', 'reload'],
   owner: true,
   sudo: true,
+  category: 'owner',
 
   async execute(sock, m, context) {
     const { command, isOwner, isSudo } = context;
