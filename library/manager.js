@@ -13,6 +13,9 @@ const smsg = (sock, m) => {
   m.isGroup = m.chat.endsWith('@g.us')
   m.sender = jidNormalizedUser(m.fromMe ? sock.user.id : (m.key.participant || m.chat))
 
+  // CRITICAL: Preserve pushName from raw message object!
+  m.pushName = m.pushName || 'User'
+
   if (!m.message) return m
 
   m.mtype = getContentType(m.message)
