@@ -45,6 +45,7 @@ const jidMatchesSuffix = (a, b) => {
 module.exports = {
   command: ['setsudo', 'delsudo', 'listsudo'],
   owner: true,
+  category: 'owner',
 
   async execute(sock, m, context) {
     const { command, args, prefix, sender } = context;
