@@ -1,7 +1,7 @@
 
 module.exports = {
   command: ['del'],
-  category: 'Owner',
+  category: 'owner',
   desc: 'Delete replied message',
   usage: '.del (reply to message)',
 
