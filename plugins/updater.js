@@ -8,6 +8,7 @@ const execAsync = promisify(exec);
 const GITHUB_ZIP = 'https://github.com/COD-LUCAS/X-MEGATRON/archive/refs/heads/main.zip';
 const GITHUB_RAW = 'https://raw.githubusercontent.com/COD-LUCAS/X-MEGATRON/main';
 
+// Files/folders to protect from deletion
 const PROTECTED = ['database', 'session', 'node_modules', '.env', 'config.js', '.git'];
 
 function isProtected(itemPath) {
@@ -43,19 +44,34 @@ async function downloadAndUpdate() {
   const tempZip = path.join(rootDir, 'update.zip');
   const tempDir = path.join(rootDir, 'update_temp');
 
+  // Clean temp directory
   if (fs.existsSync(tempDir)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
   fs.mkdirSync(tempDir, { recursive: true });
 
+  // Download update
   await execAsync(`curl -L --max-time 30 "${GITHUB_ZIP}" -o "${tempZip}"`);
-  
+
+  // Extract
   await execAsync(`unzip -o -q "${tempZip}" -d "${tempDir}"`);
   fs.unlinkSync(tempZip);
 
   const extractedFolder = fs.readdirSync(tempDir).find(f => f.startsWith('X-MEGATRON'));
   const extractedPath = path.join(tempDir, extractedFolder);
 
+  // Check if package.json changed
+  let packageChanged = false;
+  const oldPackagePath = path.join(rootDir, 'package.json');
+  const newPackagePath = path.join(extractedPath, 'package.json');
+
+  if (fs.existsSync(oldPackagePath) && fs.existsSync(newPackagePath)) {
+    const oldPackage = fs.readFileSync(oldPackagePath, 'utf8');
+    const newPackage = fs.readFileSync(newPackagePath, 'utf8');
+    packageChanged = oldPackage !== newPackage;
+  }
+
+  // Delete old files (except protected)
   for (const item of fs.readdirSync(rootDir)) {
     if (item === 'update_temp') continue;
     if (isProtected(item)) continue;
@@ -70,8 +86,9 @@ async function downloadAndUpdate() {
     } catch (e) {}
   }
 
+  // Copy new files
   for (const item of fs.readdirSync(extractedPath)) {
-    if (isProtected(item)) continue;
+    if (isProtected(item) && item !== 'package.json') continue; // Allow package.json update
 
     const src = path.join(extractedPath, item);
     const dst = path.join(rootDir, item);
@@ -85,7 +102,19 @@ async function downloadAndUpdate() {
     } catch (e) {}
   }
 
+  // Clean up temp
   fs.rmSync(tempDir, { recursive: true, force: true });
+
+  // Install new dependencies if package.json changed
+  if (packageChanged) {
+    console.log('📦 package.json changed, running npm install...');
+    try {
+      await execAsync('npm install --production', { cwd: rootDir });
+      console.log('✅ Dependencies installed successfully');
+    } catch (e) {
+      console.error('❌ npm install failed:', e.message);
+    }
+  }
 }
 
 let lastNotifiedVersion = null;
@@ -111,7 +140,7 @@ async function checkAndNotify(sock, ownerJid) {
       msg += `\n`;
     }
 
-    msg += `_Use :update now to install_`;
+    msg += `_Use .update now to install_`;
 
     await sock.sendMessage(ownerJid, { text: msg });
     lastNotifiedVersion = remote.version;
@@ -120,7 +149,7 @@ async function checkAndNotify(sock, ownerJid) {
 
 function startUpdateChecker(sock, ownerJid) {
   checkAndNotify(sock, ownerJid);
-  setInterval(() => checkAndNotify(sock, ownerJid), 180000);
+  setInterval(() => checkAndNotify(sock, ownerJid), 180000); // Every 3 minutes
 }
 
 module.exports = {
@@ -133,7 +162,7 @@ module.exports = {
     const { command, args } = context;
 
     if (command === 'update' && args[0] !== 'now') {
-      return m.reply('_Use :checkupdate first, then :update now_');
+      return m.reply('_Use .checkupdate first, then .update now_');
     }
 
     if (command === 'checkupdate' || (command === 'update' && !args[0])) {
@@ -166,7 +195,7 @@ module.exports = {
         msg += `\n`;
       }
 
-      msg += `_Use :update now to install_`;
+      msg += `_Use .update now to install_`;
 
       return sock.sendMessage(m.chat, {
         text: msg,
@@ -183,10 +212,10 @@ module.exports = {
       }
 
       if (remote.version === local.version) {
-        return m.reply('_Already on latest version. Use :hardupdate to force update_');
+        return m.reply('_Already on latest version. Use .hardupdate to force update_');
       }
 
-      await m.reply(`_Updating from v${local.version} to v${remote.version}..._`);
+      await m.reply(`_Updating from v${local.version} to v${remote.version}..._\n_This may take a moment if new packages are needed_`);
 
       downloadAndUpdate()
         .then(() => {
@@ -200,7 +229,7 @@ module.exports = {
     }
 
     if (command === 'hardupdate') {
-      await m.reply('_⚠️ Force updating from GitHub..._');
+      await m.reply('_⚠️ Force updating from GitHub..._\n_This may take a moment if new packages are needed_');
 
       downloadAndUpdate()
         .then(() => {
@@ -222,7 +251,7 @@ module.exports = {
       };
 
       let ownerJid = ownerNumbers[0];
-      
+
       if (!ownerJid.includes('@')) {
         ownerJid = extractDigits(ownerJid) + '@s.whatsapp.net';
       }
