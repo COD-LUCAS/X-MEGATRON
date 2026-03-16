@@ -1,9 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
-const { promisify } = require('util');
-
-const execAsync = promisify(exec);
+const imageToPdf = require('image-to-pdf');
 
 const PDF_TEMP = path.join(__dirname, '..', 'temp', 'pdf_temp');
 
@@ -112,12 +109,18 @@ module.exports = {
       try {
         await reply(`_Creating PDF with ${files.length} image(s)..._`);
 
-        // Build image paths
+        // Build array of image paths
         const imagePaths = files.map(f => path.join(PDF_TEMP, f));
-        const imagePathsStr = imagePaths.map(p => `"${p}"`).join(' ');
 
-        // Use img2pdf command (Python package)
-        await execAsync(`img2pdf ${imagePathsStr} -o "${pdfPath}"`);
+        // Create PDF using image-to-pdf
+        const pages = imagePaths.map(imgPath => fs.readFileSync(imgPath));
+        
+        await new Promise((resolve, reject) => {
+          imageToPdf(pages, imageToPdf.sizes.A4)
+            .pipe(fs.createWriteStream(pdfPath))
+            .on('finish', resolve)
+            .on('error', reject);
+        });
 
         // Send PDF
         const pdfBuffer = fs.readFileSync(pdfPath);
@@ -135,8 +138,8 @@ module.exports = {
         return reply('_✅ PDF created and temporary files cleaned_');
 
       } catch (e) {
-        console.error('PDF creation error:', e.message);
-        return reply(`_❌ Failed to create PDF_\n_Install img2pdf:_\n\`pip install img2pdf\`\n\n_Error: ${e.message}_`);
+        console.error('PDF creation error:', e);
+        return reply(`_❌ Failed to create PDF: ${e.message}_`);
       }
     }
   }
