@@ -13,6 +13,17 @@ function ensureFolder() {
   }
 }
 
+function cleanTempFolder() {
+  if (fs.existsSync(PDF_TEMP)) {
+    const files = fs.readdirSync(PDF_TEMP);
+    for (const file of files) {
+      try {
+        fs.unlinkSync(path.join(PDF_TEMP, file));
+      } catch (e) {}
+    }
+  }
+}
+
 module.exports = {
   command: ['pdf', 'pdfdelete', 'pdfget'],
   category: 'utility',
@@ -45,7 +56,8 @@ module.exports = {
 
       try {
         const media = await m.quoted.download();
-        const index = fs.readdirSync(PDF_TEMP).length;
+        const files = fs.readdirSync(PDF_TEMP).filter(f => f.startsWith('img_'));
+        const index = files.length;
         const imagePath = path.join(PDF_TEMP, `img_${index}.jpg`);
 
         fs.writeFileSync(imagePath, media);
@@ -61,7 +73,7 @@ module.exports = {
       ensureFolder();
 
       try {
-        const files = fs.readdirSync(PDF_TEMP);
+        const files = fs.readdirSync(PDF_TEMP).filter(f => f.startsWith('img_'));
         
         for (const file of files) {
           fs.unlinkSync(path.join(PDF_TEMP, file));
@@ -83,8 +95,12 @@ module.exports = {
       ensureFolder();
 
       const files = fs.readdirSync(PDF_TEMP)
-        .filter(f => f.endsWith('.jpg'))
-        .sort();
+        .filter(f => f.startsWith('img_') && f.endsWith('.jpg'))
+        .sort((a, b) => {
+          const numA = parseInt(a.match(/img_(\d+)/)[1]);
+          const numB = parseInt(b.match(/img_(\d+)/)[1]);
+          return numA - numB;
+        });
 
       if (files.length === 0) {
         return reply('_❌ No images saved. Use `.pdf` to add images first_');
@@ -96,11 +112,12 @@ module.exports = {
       try {
         await reply(`_Creating PDF with ${files.length} image(s)..._`);
 
-        // Build convert command with all images
-        const imagePaths = files.map(f => `"${path.join(PDF_TEMP, f)}"`).join(' ');
-        
-        // Use ImageMagick convert to create PDF
-        await execAsync(`convert ${imagePaths} "${pdfPath}"`);
+        // Build image paths
+        const imagePaths = files.map(f => path.join(PDF_TEMP, f));
+        const imagePathsStr = imagePaths.map(p => `"${p}"`).join(' ');
+
+        // Use img2pdf command (Python package)
+        await execAsync(`img2pdf ${imagePathsStr} -o "${pdfPath}"`);
 
         // Send PDF
         const pdfBuffer = fs.readFileSync(pdfPath);
@@ -112,42 +129,14 @@ module.exports = {
           caption: `_📄 Your PDF: ${pdfName}_`
         }, { quoted: m });
 
-        // Clean up
-        for (const file of files) {
-          fs.unlinkSync(path.join(PDF_TEMP, file));
-        }
-        fs.unlinkSync(pdfPath);
+        // Clean up ALL temp files (images + PDF)
+        cleanTempFolder();
 
         return reply('_✅ PDF created and temporary files cleaned_');
 
       } catch (e) {
-        console.error('PDF creation error:', e);
-        
-        // Fallback: Try using img2pdf if convert fails
-        try {
-          // Install img2pdf: npm install img2pdf-cli
-          const imagePaths = files.map(f => `"${path.join(PDF_TEMP, f)}"`).join(' ');
-          await execAsync(`img2pdf ${imagePaths} -o "${pdfPath}"`);
-
-          const pdfBuffer = fs.readFileSync(pdfPath);
-
-          await sock.sendMessage(m.chat, {
-            document: pdfBuffer,
-            mimetype: 'application/pdf',
-            fileName: pdfName,
-            caption: `_📄 Your PDF: ${pdfName}_`
-          }, { quoted: m });
-
-          for (const file of files) {
-            fs.unlinkSync(path.join(PDF_TEMP, file));
-          }
-          fs.unlinkSync(pdfPath);
-
-          return reply('_✅ PDF created and temporary files cleaned_');
-
-        } catch (e2) {
-          return reply(`_❌ Failed to create PDF. Install ImageMagick or img2pdf:_\n\`${e.message}\``);
-        }
+        console.error('PDF creation error:', e.message);
+        return reply(`_❌ Failed to create PDF_\n_Install img2pdf:_\n\`pip install img2pdf\`\n\n_Error: ${e.message}_`);
       }
     }
   }
