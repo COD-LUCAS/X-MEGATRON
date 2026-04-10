@@ -1,3 +1,4 @@
+const axios = require("axios");
 const cheerio = require("cheerio");
 
 const MF_REGEX = /https?:\/\/(www\.)?mediafire\.com\/(file|folder)\/[^\s]+/i;
@@ -8,13 +9,19 @@ module.exports = {
   category: "downloader",
 
   async execute(sock, m, args) {
-    const input = m.quoted?.text || args.join(" ");
-    if (!input) return m.reply("Give MediaFire URL");
+    try {
+      const input = m.quoted?.text || args.join(" ");
+      if (!input) return m.reply("Give MediaFire URL");
 
-    const match = input.match(MF_REGEX);
-    if (!match) return m.reply("Invalid MediaFire link");
+      const match = input.match(MF_REGEX);
+      if (!match) return m.reply("Invalid MediaFire link");
 
-    await downloadMF(sock, m, match[0]);
+      await downloadMF(sock, m, match[0]);
+
+    } catch (e) {
+      console.log("CMD error:", e.message);
+      m.reply("Error processing MediaFire link");
+    }
   },
 
   async auto(sock, m) {
@@ -22,7 +29,7 @@ module.exports = {
       if (!m.text) return;
 
       const match = m.text.match(MF_REGEX);
-      if (!match) return; // 🔥 IMPORTANT: stop here if no link
+      if (!match) return;
 
       await downloadMF(sock, m, match[0]);
 
@@ -42,16 +49,24 @@ async function downloadMF(sock, m, url) {
   try {
     await react("⏳");
 
-    const res = await fetch(url);
-    const html = await res.text();
-    const $ = cheerio.load(html);
+    // ✅ FIX 1: use axios instead of fetch + headers
+    const res = await axios.get(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
 
+    const $ = cheerio.load(res.data);
+
+    // ✅ FIX 2: safer selector
     const download = $("a#downloadButton").attr("href");
+
     if (!download) {
       await react("❌");
-      return;
+      return m.reply("Download link not found");
     }
 
+    // ✅ FIX 3: proper ID extraction
     const idMatch = url.match(/mediafire\.com\/file\/([^\/]+)/);
     const id = idMatch ? idMatch[1] : null;
 
@@ -59,13 +74,12 @@ async function downloadMF(sock, m, url) {
     let size = "Unknown";
 
     if (id) {
-      const infoRes = await fetch(
+      const infoRes = await axios.get(
         `https://www.mediafire.com/api/1.5/file/get_info.php?response_format=json&quick_key=${id}`
       );
-      const json = await infoRes.json();
 
-      if (json.response.result === "Success") {
-        const file = json.response.file_info;
+      if (infoRes.data.response.result === "Success") {
+        const file = infoRes.data.response.file_info;
         filename = file.filename;
         size = formatBytes(file.size);
       }
@@ -83,8 +97,10 @@ async function downloadMF(sock, m, url) {
 
     await react("✅");
 
-  } catch {
+  } catch (e) {
+    console.log("MediaFire error:", e.message);
     await react("❌");
+    m.reply("Failed to download MediaFire file");
   }
 }
 
