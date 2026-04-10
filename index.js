@@ -61,30 +61,50 @@ const clientstart = async () => {
   try {
     await loadBaileys();
 
+    log.info('Checking dependencies');
+    log.success('Dependencies loaded');
+
     const sessionDir = `./${config().session}`;
     const sessionFile = `${sessionDir}/creds.json`;
 
+    log.info('Initializing session');
     await initSession(sessionDir);
 
     if (!fs.existsSync(sessionFile)) {
-      const sessionId = process.env.SESSION_ID;
+      log.info('Downloading session from Database');
 
-      if (!sessionId.includes('~')) process.exit(1);
+      const sessionId = process.env.SESSION_ID;
+      if (!sessionId.includes('~')) {
+        log.error('Invalid SESSION_ID.');
+        process.exit(1);
+      }
 
       const code = sessionId.split('~').pop().trim();
-      if (!code) process.exit(1);
+      if (!code) {
+        log.error('Invalid SESSION_ID');
+        process.exit(1);
+      }
 
       try {
         const res = await axios.get(`https://pastebin.com/raw/${code}`, { timeout: 10000 });
-        if (!res.data || typeof res.data !== 'object') process.exit(1);
+        if (!res.data || typeof res.data !== 'object') {
+          log.error('Invalid session data');
+          process.exit(1);
+        }
         fs.writeFileSync(sessionFile, JSON.stringify(res.data, null, 2));
+        log.success('Session downloaded successfully');
       } catch (error) {
+        log.error('Failed to download session:', error.message);
         process.exit(1);
       }
     }
 
+    log.success('Session initialized');
+
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     const { version } = await fetchLatestBaileysVersion();
+
+    log.info('Starting socket connection');
 
     const sock = makeWASocket({
       auth: state,
@@ -99,6 +119,31 @@ const clientstart = async () => {
 
     sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
       if (connection === 'open') {
+        log.success('Plugins loaded');
+        const num = sock.user.id.split(':')[0];
+        log.success(`Connected as +${num}`);
+
+        try {
+          const updater = require('./plugins/updater');
+          if (updater.init) {
+            const ownerFromEnv = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean);
+            const ownerFromFile = [];
+            try {
+              const ownerFile = path.join(__dirname, 'owner.json');
+              if (fs.existsSync(ownerFile)) {
+                const raw = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+                if (Array.isArray(raw)) ownerFromFile.push(...raw);
+              }
+            } catch (e) {}
+
+            const allOwners = [...ownerFromEnv, ...ownerFromFile];
+            if (allOwners.length > 0) {
+              updater.init(sock, allOwners);
+              log.success('Update checker started');
+            }
+          }
+        } catch (e) {}
+
         try {
           if (fs.existsSync('./plugins/startup.js')) {
             require('./plugins/startup').execute(sock);
@@ -112,6 +157,7 @@ const clientstart = async () => {
         if (code !== DisconnectReason.loggedOut) {
           setTimeout(clientstart, 5000);
         } else {
+          log.error('Logged out, please get new SESSION_ID');
           process.exit(1);
         }
       }
@@ -122,11 +168,8 @@ const clientstart = async () => {
         if (type !== 'notify') return;
         const mek = messages[0];
         if (!mek?.message) return;
-        if (mek.key.fromMe) return;
 
         mek.message = mek.message.ephemeralMessage?.message || mek.message;
-
-        if (!mek.message.conversation && !mek.message.extendedTextMessage) return;
 
         const { smsg } = require('./library/manager');
         const m = await smsg(sock, mek);
@@ -143,6 +186,7 @@ const clientstart = async () => {
     };
 
   } catch (error) {
+    log.error('Fatal error:', error.message);
     process.exit(1);
   }
 };
