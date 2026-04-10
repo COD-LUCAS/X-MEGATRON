@@ -6,26 +6,22 @@ module.exports = {
   name: "mediafire",
   command: ["mediafire", "mf"],
   category: "downloader",
-  onText: true,
 
   async execute(sock, m, args) {
-    const url = args[0];
-    if (!url) return m.reply("Give MediaFire URL");
-
-    if (!MF_REGEX.test(url)) return m.reply("Invalid MediaFire link");
-
-    await downloadMF(sock, m, url);
-  },
-
-  async auto(sock, m) {
     try {
-      if (!m.text) return;
+      const input = m.quoted?.text || args.join(" ");
+      if (!input) return m.reply("Give MediaFire URL");
 
-      const match = m.text.match(MF_REGEX);
-      if (!match) return;
+      const match = input.match(MF_REGEX);
+      if (!match) return m.reply("Invalid MediaFire link");
 
-      await downloadMF(sock, m, match[0]);
-    } catch {}
+      const url = match[0];
+
+      await downloadMF(sock, m, url);
+
+    } catch {
+      m.reply("Error processing MediaFire link");
+    }
   }
 };
 
@@ -51,32 +47,33 @@ async function downloadMF(sock, m, url) {
       return m.reply("Failed to fetch download link");
     }
 
-    const id = url.split("/")[4];
+    // FIX: extract ID safely
+    const idMatch = url.match(/mediafire\.com\/file\/([^\/]+)/);
+    const id = idMatch ? idMatch[1] : null;
 
-    const infoRes = await fetch(
-      `https://www.mediafire.com/api/1.5/file/get_info.php?response_format=json&quick_key=${id}`
-    );
-    const json = await infoRes.json();
+    let filename = "file";
+    let size = "Unknown";
 
-    if (json.response.result !== "Success") {
-      await react("❌");
-      return m.reply("Failed to fetch file info");
+    if (id) {
+      const infoRes = await fetch(
+        `https://www.mediafire.com/api/1.5/file/get_info.php?response_format=json&quick_key=${id}`
+      );
+      const json = await infoRes.json();
+
+      if (json.response.result === "Success") {
+        const file = json.response.file_info;
+        filename = file.filename;
+        size = formatBytes(file.size);
+      }
     }
 
-    const file = json.response.file_info;
-
-    const caption = `💌 Name: ${file.filename}
-📊 Size: ${formatBytes(file.size)}
-📦 Type: ${file.filetype}`;
-
-    await m.reply(caption);
+    await m.reply(`💌 Name: ${filename}\n📊 Size: ${size}`);
 
     await sock.sendMessage(
       m.chat,
       {
         document: { url: download },
-        fileName: file.filename,
-        mimetype: file.mimetype || "application/octet-stream"
+        fileName: filename
       },
       { quoted: m }
     );
@@ -86,6 +83,7 @@ async function downloadMF(sock, m, url) {
   } catch (e) {
     console.log("MediaFire error:", e.message);
     await react("❌");
+    m.reply("Failed to download MediaFire file");
   }
 }
 
