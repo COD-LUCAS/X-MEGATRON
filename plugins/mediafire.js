@@ -8,20 +8,25 @@ module.exports = {
   category: "downloader",
 
   async execute(sock, m, args) {
+    const input = m.quoted?.text || args.join(" ");
+    if (!input) return m.reply("Give MediaFire URL");
+
+    const match = input.match(MF_REGEX);
+    if (!match) return m.reply("Invalid MediaFire link");
+
+    await downloadMF(sock, m, match[0]);
+  },
+
+  async auto(sock, m) {
     try {
-      const input = m.quoted?.text || args.join(" ");
-      if (!input) return m.reply("Give MediaFire URL");
+      if (!m.text) return;
 
-      const match = input.match(MF_REGEX);
-      if (!match) return m.reply("Invalid MediaFire link");
+      const match = m.text.match(MF_REGEX);
+      if (!match) return; // 🔥 IMPORTANT: stop here if no link
 
-      const url = match[0];
+      await downloadMF(sock, m, match[0]);
 
-      await downloadMF(sock, m, url);
-
-    } catch {
-      m.reply("Error processing MediaFire link");
-    }
+    } catch {}
   }
 };
 
@@ -44,10 +49,9 @@ async function downloadMF(sock, m, url) {
     const download = $("a#downloadButton").attr("href");
     if (!download) {
       await react("❌");
-      return m.reply("Failed to fetch download link");
+      return;
     }
 
-    // FIX: extract ID safely
     const idMatch = url.match(/mediafire\.com\/file\/([^\/]+)/);
     const id = idMatch ? idMatch[1] : null;
 
@@ -67,23 +71,20 @@ async function downloadMF(sock, m, url) {
       }
     }
 
-    await m.reply(`💌 Name: ${filename}\n📊 Size: ${size}`);
-
     await sock.sendMessage(
       m.chat,
       {
         document: { url: download },
-        fileName: filename
+        fileName: filename,
+        caption: `💌 ${filename}\n📊 ${size}`
       },
       { quoted: m }
     );
 
     await react("✅");
 
-  } catch (e) {
-    console.log("MediaFire error:", e.message);
+  } catch {
     await react("❌");
-    m.reply("Failed to download MediaFire file");
   }
 }
 
