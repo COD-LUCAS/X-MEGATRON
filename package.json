@@ -57,7 +57,8 @@
     "adm-zip": "^0.5.10",
     "form-data":"^4.0.0",
     "image-to-pdf": "^3.0.2",
-    "file-type": "^18.5.0"
+    "file-type": "^18.5.0",
+    "cheerio": "^1.0.0-rc.12"
   },
   "devDependencies": {},
   "repository": {
