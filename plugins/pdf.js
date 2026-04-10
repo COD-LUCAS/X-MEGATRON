@@ -1,146 +1,138 @@
-const fs = require('fs');
-const path = require('path');
-const imageToPdf = require('image-to-pdf');
+const { convert: imageToPdf, sizes } = require("image-to-pdf")
+const fs = require("fs")
+const fsp = require("fs/promises")
+const path = require("path")
+const fileType = require("file-type")
 
-const PDF_TEMP = path.join(__dirname, '..', 'temp', 'pdf_temp');
+const BASE_DIR = "./temp/pdf"
 
-function ensureFolder() {
-  if (!fs.existsSync(PDF_TEMP)) {
-    fs.mkdirSync(PDF_TEMP, { recursive: true });
+// ensure base dir
+if (!fs.existsSync(BASE_DIR)) fs.mkdirSync(BASE_DIR, { recursive: true })
+
+const getFileType = async (buffer) => {
+  try {
+    if (fileType.fileTypeFromBuffer) return await fileType.fileTypeFromBuffer(buffer)
+    if (fileType.fromBuffer) return await fileType.fromBuffer(buffer)
+    return await fileType(buffer)
+  } catch {
+    return null
   }
 }
 
-function cleanTempFolder() {
-  if (fs.existsSync(PDF_TEMP)) {
-    const files = fs.readdirSync(PDF_TEMP);
-    for (const file of files) {
-      try {
-        fs.unlinkSync(path.join(PDF_TEMP, file));
-      } catch (e) {}
-    }
-  }
+const sanitizeName = (name) => {
+  return name.replace(/[^a-zA-Z0-9_-]/g, "_")
 }
 
 module.exports = {
-  command: ['pdf', 'pdfdelete', 'pdfget'],
-  category: 'utility',
-  desc: 'Create PDF from images',
-  usage: '.pdf (reply to image) | .pdfdelete | .pdfget <name>',
+  command: ["pdf"],
+  category: "converter",
+  desc: "Convert images to PDF",
+  usage: ".pdf <reply/get/delete/help>",
 
   async execute(sock, m, context) {
-    const { command, args, reply } = context;
+    const { args, reply, sender } = context
 
-    // ==================== PDF HELP / ADD IMAGE ====================
-    if (command === 'pdf') {
-      if (!m.quoted) {
-        return reply(
-          '_📝 *PDF Creator Help*_\n\n' +
-          '_`.pdf` → Show help_\n' +
-          '_`.pdfdelete` → Delete all saved images_\n' +
-          '_`.pdfget <name>` → Generate PDF_\n\n' +
-          '_*How to use:*_\n' +
-          '_1️⃣ Reply to an image using `.pdf`_\n' +
-          '_2️⃣ Add more images by replying again_\n' +
-          '_3️⃣ Use `.pdfget name` to create PDF_'
-        );
-      }
+    const sub = args[0]?.toLowerCase()
 
-      if (m.quoted.mtype !== 'imageMessage') {
-        return reply('_Reply to an image only_');
-      }
+    const userDir = path.join(BASE_DIR, sender)
+    const outputPath = path.join(userDir, "output.pdf")
 
-      ensureFolder();
+    // ensure user folder
+    if (!fs.existsSync(userDir)) {
+      fs.mkdirSync(userDir, { recursive: true })
+    }
 
+    // HELP
+    if (sub === "help") {
+      return reply(
+        `_1. Reply image with .pdf_\n` +
+        `_2. Use .pdf get <name> to generate PDF_\n` +
+        `_3. Use .pdf delete to clear images_\n` +
+        `_4. Files auto-delete after output_`
+      )
+    }
+
+    // DELETE
+    if (sub === "delete") {
       try {
-        const media = await m.quoted.download();
-        const files = fs.readdirSync(PDF_TEMP).filter(f => f.startsWith('img_'));
-        const index = files.length;
-        const imagePath = path.join(PDF_TEMP, `img_${index}.jpg`);
-
-        fs.writeFileSync(imagePath, media);
-
-        return reply(`_✅ Image saved!_\n_Total images: ${index + 1}_`);
-      } catch (e) {
-        return reply('_Failed to save image_');
+        const files = await fsp.readdir(userDir)
+        await Promise.all(files.map(f => fsp.unlink(path.join(userDir, f))))
+        return reply(`_Successfully cleared your files!_`)
+      } catch {
+        return reply(`_Nothing to delete_`)
       }
     }
 
-    // ==================== PDF DELETE ====================
-    if (command === 'pdfdelete') {
-      ensureFolder();
+    // GET PDF
+    if (sub === "get") {
+      const nameArg = args.slice(1).join(" ") || "converted"
+      const fileName = sanitizeName(nameArg) + ".pdf"
+
+      const files = (await fsp.readdir(userDir))
+        .filter(f => f.startsWith("img_"))
+        .map(f => path.join(userDir, f))
+
+      if (!files.length) return reply(`_No images added_`)
 
       try {
-        const files = fs.readdirSync(PDF_TEMP).filter(f => f.startsWith('img_'));
-        
-        for (const file of files) {
-          fs.unlinkSync(path.join(PDF_TEMP, file));
+        const stream = imageToPdf(files, sizes.A4)
+        const write = fs.createWriteStream(outputPath)
+
+        stream.pipe(write)
+
+        write.on("finish", async () => {
+          await sock.sendMessage(
+            m.chat,
+            {
+              document: fs.readFileSync(outputPath),
+              mimetype: "application/pdf",
+              fileName
+            },
+            { quoted: m }
+          )
+
+          // CLEAN USER FOLDER
+          const all = await fsp.readdir(userDir)
+          await Promise.all(all.map(f => fsp.unlink(path.join(userDir, f))))
+        })
+
+        write.on("error", async () => {
+          reply(`_PDF conversion failed_`)
+        })
+
+      } catch {
+        return reply(`_Failed to generate PDF_`)
+      }
+
+      return
+    }
+
+    // ADD IMAGE
+    if (m.quoted) {
+      try {
+        const buffer = await m.quoted.download()
+        const type = await getFileType(buffer)
+
+        if (!type || !type.mime.startsWith("image")) {
+          return reply(`_Reply to an image_`)
         }
 
-        return reply(`_🗑️ All saved images deleted! (${files.length} files)_`);
-      } catch (e) {
-        return reply('_Failed to delete images_');
+        const files = (await fsp.readdir(userDir)).filter(f => f.startsWith("img_"))
+        const filePath = path.join(userDir, `img_${files.length}.jpg`)
+
+        await fsp.writeFile(filePath, buffer)
+
+        return reply(
+          `*_Image saved_*\n` +
+          `_*Total: ${files.length + 1}*_\n` +
+          `_*Use .pdf get <name>*_`
+        )
+
+      } catch {
+        return reply(`_Failed to save image_`)
       }
     }
 
-    // ==================== PDF GET ====================
-    if (command === 'pdfget') {
-      if (!args[0]) {
-        return reply('_Provide a PDF name_\n_Example: .pdfget mydocument_');
-      }
-
-      const name = args.join(' ').trim();
-      ensureFolder();
-
-      const files = fs.readdirSync(PDF_TEMP)
-        .filter(f => f.startsWith('img_') && f.endsWith('.jpg'))
-        .sort((a, b) => {
-          const numA = parseInt(a.match(/img_(\d+)/)[1]);
-          const numB = parseInt(b.match(/img_(\d+)/)[1]);
-          return numA - numB;
-        });
-
-      if (files.length === 0) {
-        return reply('_❌ No images saved. Use `.pdf` to add images first_');
-      }
-
-      const pdfName = `${name}.pdf`;
-      const pdfPath = path.join(PDF_TEMP, pdfName);
-
-      try {
-        await reply(`_Creating PDF with ${files.length} image(s)..._`);
-
-        // Build array of image paths
-        const imagePaths = files.map(f => path.join(PDF_TEMP, f));
-
-        // Create PDF using image-to-pdf
-        const pages = imagePaths.map(imgPath => fs.readFileSync(imgPath));
-        
-        await new Promise((resolve, reject) => {
-          imageToPdf(pages, imageToPdf.sizes.A4)
-            .pipe(fs.createWriteStream(pdfPath))
-            .on('finish', resolve)
-            .on('error', reject);
-        });
-
-        // Send PDF
-        const pdfBuffer = fs.readFileSync(pdfPath);
-
-        await sock.sendMessage(m.chat, {
-          document: pdfBuffer,
-          mimetype: 'application/pdf',
-          fileName: pdfName,
-          caption: `_📄 Your PDF: ${pdfName}_`
-        }, { quoted: m });
-
-        // Clean up ALL temp files (images + PDF)
-        cleanTempFolder();
-
-        return reply('_✅ PDF created and temporary files cleaned_');
-
-      } catch (e) {
-        console.error('PDF creation error:', e);
-        return reply(`_❌ Failed to create PDF: ${e.message}_`);
-      }
-    }
+    return reply(`_Reply to an image or use .pdf help_`)
   }
-};
+}
