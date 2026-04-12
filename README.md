@@ -17,12 +17,27 @@ This project is designed to be lightweight, extendable, and compatible with **Re
 
 ## - Scan QR & Generate Session
 
-Click the button below to scan the QR code and generate your **SESSION ID**:
+## 🔐 Generate Session ID
 
+Click any server below to scan the QR code and generate your **SESSION ID**:
+
+<br>
+
+### 🖥️ Server 1
+<a href="https://xmegatronv1.onrender.com/" target="_blank">
+  <img
+    alt="SCAN QR SERVER 1"
+    src="https://img.shields.io/badge/Server_1-Scan_QR-000000?style=for-the-badge&logo=scan&logoColor=white"
+  />
+</a>
+
+<br><br>
+
+### 🖥️ Server 2
 <a href="http://45.137.70.90:2138/" target="_blank">
   <img
-    alt="SCAN QR"
-    src="https://img.shields.io/badge/Scan_QR-000000?style=for-the-badge&logo=scan&logoColor=white"
+    alt="SCAN QR SERVER 2"
+    src="https://img.shields.io/badge/Server_2-Scan_QR-000000?style=for-the-badge&logo=scan&logoColor=white"
   />
 </a>
 
