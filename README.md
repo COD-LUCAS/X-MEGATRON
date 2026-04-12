@@ -19,7 +19,7 @@ This project is designed to be lightweight, extendable, and compatible with **Re
 
 Click the button below to scan the QR code and generate your **SESSION ID**:
 
-<a href="https://xmegatronv1.onrender.com/" target="_blank">
+<a href="http://45.137.70.90:2138/" target="_blank">
   <img
     alt="SCAN QR"
     src="https://img.shields.io/badge/Scan_QR-000000?style=for-the-badge&logo=scan&logoColor=white"
