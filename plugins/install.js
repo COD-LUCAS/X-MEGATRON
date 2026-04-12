@@ -155,7 +155,8 @@ module.exports = {
         addPluginDB(commandNames, url, filename);
 
         await sock.sendMessage(m.chat, {
-          text: `_✅ Installed: ${commandNames}_\n\n_File: ${filename}_\n_Saved to database/external_plugins/_\n_Restart to load plugin_`,
+          text: `_✅ Installed: ${commandNames}_\n\n_File: ${filename}_\n_
+_\n_Restart to load plugin_`,
           edit: statusMsg.key
         });
 
