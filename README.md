@@ -34,7 +34,7 @@ Click any server below to scan the QR code and generate your **SESSION ID**:
 <br><br>
 
 ### 🖥️ Server 2
-<a href="http://45.137.70.90:2138/" target="_blank">
+<a href="https://xmegatron-session.onrender.com/" target="_blank">
   <img
     alt="SCAN QR SERVER 2"
     src="https://img.shields.io/badge/Server_2-Scan_QR-000000?style=for-the-badge&logo=scan&logoColor=white"
