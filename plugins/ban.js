@@ -17,7 +17,7 @@ module.exports = {
   command: ['ban', 'unban', 'listban'],
   owner: true,
   category: 'owner',
-  desc: 'Ban a PM or group from using the bot',
+  desc: 'Ban a User or group from using the bot',
   usage: '.ban — bans current chat | .unban — unbans | .listban — show all',
 
   async execute(sock, m, context) {
