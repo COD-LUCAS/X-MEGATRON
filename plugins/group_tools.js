@@ -2,7 +2,7 @@
 
 const fs   = require('fs');
 const path = require('path');
-const { getAdminStatus } = require('../database/base');
+const { getAdminStatus } = require('../library/base');
 
 const DB   = path.join(__dirname, '..', 'database', 'group_settings.json');
 const rdb  = () => { try { if (fs.existsSync(DB)) return JSON.parse(fs.readFileSync(DB, 'utf8')); } catch (_) {} return {}; };
