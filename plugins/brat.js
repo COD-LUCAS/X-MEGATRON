@@ -1,60 +1,79 @@
-const axios = require('axios')
-const { Sticker, StickerTypes } = require('wa-sticker-formatter')
+'use strict';
+
+const axios  = require('axios');
+const fs     = require('fs');
+const path   = require('path');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegP = require('ffmpeg-static');
+
+ffmpeg.setFfmpegPath(ffmpegP);
+
+const TMP = path.join(__dirname, '..', 'database', 'tmp');
+if (!fs.existsSync(TMP)) fs.mkdirSync(TMP, { recursive: true });
+
+const tmpFile = (ext) => path.join(TMP, `brat_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`);
+const cleanup = (...files) => { for (const f of files) try { if (f && fs.existsSync(f)) fs.unlinkSync(f); } catch(_){} };
+
+const toSticker = (buf) => new Promise((resolve, reject) => {
+  const inp = tmpFile('png');
+  const out = tmpFile('webp');
+  fs.writeFileSync(inp, buf);
+
+  ffmpeg(inp)
+    .outputOptions([
+      '-vf', 'scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white',
+      '-vcodec', 'libwebp',
+      '-lossless', '0',
+      '-qscale', '50',
+      '-preset', 'default',
+      '-loop', '0',
+      '-an',
+    ])
+    .toFormat('webp')
+    .save(out)
+    .on('end', () => { const r = fs.readFileSync(out); cleanup(inp, out); resolve(r); })
+    .on('error', (e) => { cleanup(inp, out); reject(e); });
+});
+
+const APIS = [
+  (t) => `https://brat.caliphdev.com/api/brat?text=${encodeURIComponent(t)}`,
+  (t) => `https://aqul-brat.hf.space/?text=${encodeURIComponent(t)}`,
+];
 
 module.exports = {
   command: ['brat'],
   category: 'converter',
-  desc: 'Create brat style stickers from text',
-  usage: '.brat <text> or reply to message',
-  group: false,
-  admin: false,
-  owner: false,
+  desc: 'Create brat style text sticker',
+  usage: '.brat <text>',
 
   async execute(sock, m, context) {
-    const { reply, quoted, text, prefix, command } = context
+    const { text, reply, prefix, command } = context;
+    const bratText = text || m.quoted?.body || '';
 
-    if (!text && (!quoted || !quoted.text)) {
-      await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } })
-      return reply(`Send or reply text\n${prefix}${command} your_text`)
+    if (!bratText.trim()) {
+      return reply(`_Send text with the command_\n_Example: ${prefix}${command} hello_`);
     }
 
-    const bratText = text || quoted.text
-    const packName = m.pushName || 'Brat'
-    const authorName = 'X MEGATRON'
+    await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } });
 
-    try {
-      await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } })
-
-      const makeSticker = async (url) => {
-        const res = await axios.get(url, { responseType: 'arraybuffer' })
-        const buffer = Buffer.from(res.data)
-
-        const sticker = new Sticker(buffer, {
-          pack: packName,
-          author: authorName,
-          type: StickerTypes.FULL,
-          quality: 50
-        })
-
-        return await sticker.toBuffer()
-      }
-
+    let lastErr;
+    for (const apiFn of APIS) {
       try {
-        const url1 = 'https://brat.caliphdev.com/api/brat?text=' + encodeURIComponent(bratText)
-        const stickerBuffer = await makeSticker(url1)
-        await sock.sendMessage(m.chat, { sticker: stickerBuffer }, { quoted: m })
-        await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } })
-      } catch {
-        const url2 = 'https://aqul-brat.hf.space/?text=' + encodeURIComponent(bratText)
-        const stickerBuffer = await makeSticker(url2)
-        await sock.sendMessage(m.chat, { sticker: stickerBuffer }, { quoted: m })
-        await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } })
+        const res = await axios.get(apiFn(bratText), {
+          responseType: 'arraybuffer',
+          timeout: 15000,
+        });
+        const buf = Buffer.from(res.data);
+        const sticker = await toSticker(buf);
+        await sock.sendMessage(m.chat, { sticker }, { quoted: m });
+        await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
+        return;
+      } catch (e) {
+        lastErr = e;
       }
-
-    } catch (err) {
-      console.log('Brat error:', err)
-      await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } })
-      reply('Failed to create brat sticker')
     }
-  }
-}
+
+    await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
+    return reply(`_Failed: ${lastErr?.message || 'API error'}_`);
+  },
+};
