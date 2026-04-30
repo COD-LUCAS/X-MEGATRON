@@ -73,7 +73,8 @@ module.exports = {
       await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
       return reply(
         `_Sticker bonded to_ \`${prefix}${cmd}\`\n` +
-        `_No restart needed — active immediately ✓_`
+        `_reloading.......
+._`
       );
     }
 
