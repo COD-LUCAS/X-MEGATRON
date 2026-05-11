@@ -2,7 +2,7 @@ const {
   jidNormalizedUser,
   getContentType,
   downloadContentFromMessage
-} = require('@whiskeysockets/baileys')
+} = require('@itsliaaa/baileys')
 
 // Message types that never carry real user text.
 // If getContentType() returns one of these, m.body will always be '' and
