@@ -1,5 +1,5 @@
 const { Sticker } = require("wa-sticker-formatter");
-const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
+const { downloadContentFromMessage } = require("@itsliaaa/baileys");
 
 async function getQuotedMessage(m) {
   const ctx = m.message?.extendedTextMessage?.contextInfo;
