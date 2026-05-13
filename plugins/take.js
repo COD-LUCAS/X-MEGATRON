@@ -1,3 +1,4 @@
+
 'use strict';
 
 const fs = require('fs');
@@ -12,15 +13,66 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
+// Clean all old temp files on startup
+const cleanAllTempFiles = () => {
+  try {
+    const files = fs.readdirSync(TMP_DIR);
+    let deleted = 0;
+    for (const file of files) {
+      const filePath = path.join(TMP_DIR, file);
+      try {
+        fs.unlinkSync(filePath);
+        deleted++;
+      } catch (_) {}
+    }
+    if (deleted > 0) {
+      console.log(`Cleaned ${deleted} temp files`);
+    }
+  } catch (_) {}
+};
+
+// Run cleanup on startup
+cleanAllTempFiles();
+
+// Clean temp files older than 1 minute
+const cleanOldTempFiles = () => {
+  try {
+    const files = fs.readdirSync(TMP_DIR);
+    const now = Date.now();
+    for (const file of files) {
+      const filePath = path.join(TMP_DIR, file);
+      try {
+        const stats = fs.statSync(filePath);
+        if (now - stats.birthtimeMs > 60000) { // 1 minute
+          fs.unlinkSync(filePath);
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+};
+
+// Run cleanup every 30 seconds
+setInterval(cleanOldTempFiles, 30000);
+
 const tmpFile = (ext) => path.join(TMP_DIR, `take_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`);
-const del = (...files) => files.forEach(f => { try { if (f && fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {} });
+const del = (...files) => {
+  for (const f of files) {
+    try {
+      if (f && fs.existsSync(f)) fs.unlinkSync(f);
+    } catch (_) {}
+  }
+};
 
 // Image to WebP sticker
 const imageToSticker = (buffer) => new Promise((resolve, reject) => {
   const input = tmpFile('jpg');
   const output = tmpFile('webp');
   
-  fs.writeFileSync(input, buffer);
+  try {
+    fs.writeFileSync(input, buffer);
+  } catch (err) {
+    return reject(err);
+  }
   
   ffmpeg(input)
     .outputOptions([
@@ -55,7 +107,11 @@ const videoToSticker = (buffer) => new Promise((resolve, reject) => {
   const input = tmpFile('mp4');
   const output = tmpFile('webp');
   
-  fs.writeFileSync(input, buffer);
+  try {
+    fs.writeFileSync(input, buffer);
+  } catch (err) {
+    return reject(err);
+  }
   
   ffmpeg(input)
     .outputOptions([
@@ -95,13 +151,27 @@ module.exports = {
   async execute(sock, m, context) {
     const { reply, args } = context;
     
+    // Check disk space before starting
     try {
-      // Check if replying to a message
+      const stats = fs.statfsSync(TMP_DIR);
+      const freeBytes = stats.bavail * stats.bsize;
+      const freeMB = freeBytes / (1024 * 1024);
+      if (freeMB < 50) {
+        // Critical: clean all temp files
+        cleanAllTempFiles();
+        const newStats = fs.statfsSync(TMP_DIR);
+        const newFreeMB = (newStats.bavail * newStats.bsize) / (1024 * 1024);
+        if (newFreeMB < 50) {
+          return reply('_Low disk space, cannot process_');
+        }
+      }
+    } catch (_) {}
+    
+    try {
       if (!m.quoted) {
         return reply('_Reply to a sticker, image, or video_');
       }
 
-      // Get the quoted message
       const quotedMsg = m.quoted.message;
       if (!quotedMsg) {
         return reply('_Could not find quoted message_');
@@ -123,12 +193,12 @@ module.exports = {
       await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } });
 
       let stickerBuffer;
-      let mediaBuffer;
+      let mediaBuffer = null;
+      let stream = null;
 
       // Handle sticker message
       if (quotedMsg.stickerMessage) {
-        // Download sticker
-        const stream = await downloadContentFromMessage(quotedMsg.stickerMessage, 'sticker');
+        stream = await downloadContentFromMessage(quotedMsg.stickerMessage, 'sticker');
         let buffer = Buffer.alloc(0);
         for await (const chunk of stream) {
           buffer = Buffer.concat([buffer, chunk]);
@@ -138,7 +208,7 @@ module.exports = {
       }
       // Handle image message
       else if (quotedMsg.imageMessage) {
-        const stream = await downloadContentFromMessage(quotedMsg.imageMessage, 'image');
+        stream = await downloadContentFromMessage(quotedMsg.imageMessage, 'image');
         let buffer = Buffer.alloc(0);
         for await (const chunk of stream) {
           buffer = Buffer.concat([buffer, chunk]);
@@ -148,7 +218,7 @@ module.exports = {
       }
       // Handle video message
       else if (quotedMsg.videoMessage) {
-        const stream = await downloadContentFromMessage(quotedMsg.videoMessage, 'video');
+        stream = await downloadContentFromMessage(quotedMsg.videoMessage, 'video');
         let buffer = Buffer.alloc(0);
         for await (const chunk of stream) {
           buffer = Buffer.concat([buffer, chunk]);
@@ -161,7 +231,7 @@ module.exports = {
         return reply('_Reply to a sticker, image, or video_');
       }
 
-      if (!stickerBuffer) {
+      if (!stickerBuffer || stickerBuffer.length === 0) {
         await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
         return reply('_Failed to process media_');
       }
@@ -180,10 +250,26 @@ module.exports = {
       await sock.sendMessage(m.chat, { sticker: finalSticker }, { quoted: m });
       await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
 
+      // Immediate cleanup of media buffer
+      mediaBuffer = null;
+      stickerBuffer = null;
+      
+      // Force garbage collection if possible
+      if (global.gc) {
+        global.gc();
+      }
+
     } catch (err) {
       console.error('Take plugin error:', err);
       await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } }).catch(() => {});
-      reply(`_Failed: ${err.message}_`);
+      
+      if (err.message.includes('ENOSPC')) {
+        // Clean all temp files on disk full error
+        cleanAllTempFiles();
+        reply('_Disk full. Temp files cleaned. Try again_'');
+      } else {
+        reply(`_Failed: ${err.message}_`);
+      }
     }
-  }
+  },
 };
