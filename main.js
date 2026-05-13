@@ -59,7 +59,6 @@ const loadSudo = () => {
     }
   } catch (e) {}
 
-  // Include OWNER so isOwner works in groups (fromMe=false for owner in groups)
   return [...new Set([...owners, ...env, ...file])];
 };
 
@@ -105,12 +104,10 @@ class Loader {
           delete require.cache[require.resolve(path.join(dir, file))];
           const p = require(path.join(dir, file));
           
-          // FIXED: Load plugins with command OR onText
           if (!p?.command && !p?.onText) continue;
 
           this.plugins.push(p);
 
-          // Only add to map if it has commands
           if (p.command) {
             const cmds = Array.isArray(p.command) ? p.command : [p.command];
             cmds.forEach(c => this.map.set(c.toLowerCase(), p));
@@ -145,7 +142,6 @@ class Loader {
   }
 
   onText(sock, m, ctx) {
-    // Guard: never run onText plugins when there is no real message text
     if (!m.body || !m.body.trim()) return;
     if (!ctx.text || !ctx.text.trim()) return;
 
@@ -168,25 +164,32 @@ class Loader {
 }
 
 const loader = new Loader();
-global.pluginLoader = loader; // exposed for install.js hot reload
+global.pluginLoader = loader;
 const groupMetaCache = new Map();
 
 module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
   if (m.key.remoteJid === 'status@broadcast') return;
-
-  // Drop system messages flagged by manager.js (reactions, protocol, group events, etc.)
   if (m.isSystem) return;
 
-  // Ban check — silently ignore all messages from banned chats.
-  // Owner can still use .unban from inside a banned chat.
+  // Determine if this is from the bot itself EARLY
+  const isFromMe = m.fromMe === true;
+  
+  // Ban check - allow owner to unban from banned chat
   try {
     const { isBanned } = require('./plugins/ban');
     if (isBanned(m.chat)) {
-      // Allow owner to unban from inside the banned chat
-      if (!m.fromMe) return;
-      const rawBody  = (m.body || '').trim();
-      const pfxList  = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim()).filter(Boolean);
+      // Allow fromMe or owner to unban
+      if (!isFromMe) {
+        // Check if sender is owner
+        const sudoList = loadSudo();
+        const senderNum = m.sender?.split('@')[0] || '';
+        const isOwnerNum = sudoList.some(s => senderNum === s.replace(/\D/g, ''));
+        if (!isOwnerNum) return;
+      }
+      
+      const rawBody = (m.body || '').trim();
+      const pfxList = prefixes;
       const hasPrefix = pfxList.some(p => rawBody.startsWith(p));
       if (!hasPrefix) return;
       const cmd = rawBody.slice(pfxList.find(p => rawBody.startsWith(p))?.length || 1).trim().split(/\s+/)[0]?.toLowerCase();
@@ -197,52 +200,59 @@ module.exports = async (sock, m) => {
   const body = m.body || '';
   const sender = m.sender || '';
 
-  if (!sender) return;
+  if (!sender && !isFromMe) return;
 
   const sudoList = loadSudo();
-  const isOwner = m.fromMe || isSudo(sender, sudoList);
-  const isSudoUser = !m.fromMe && isSudo(sender, sudoList);
+  // FIXED: isOwner should be TRUE for fromMe messages
+  const isOwner = isFromMe || isSudo(sender, sudoList);
+  const isSudoUser = !isFromMe && isSudo(sender, sudoList);
 
   const mode = (process.env.MODE || 'public').toLowerCase();
-  if (mode === 'private' && !isOwner) return;
-  if (mode === 'group' && !m.isGroup && !isOwner) return;
-  if (mode === 'pm' && m.isGroup && !isOwner) return;
+  // FIXED: Allow fromMe messages in all modes
+  if (!isFromMe) {
+    if (mode === 'private' && !isOwner) return;
+    if (mode === 'group' && !m.isGroup && !isOwner) return;
+    if (mode === 'pm' && m.isGroup && !isOwner) return;
+  }
 
   let meta = null;
   let isAdmin = false;
   let isBotAdmin = false;
 
-  // FIXED: Fetch metadata immediately for groups
+  // Fetch group metadata for groups
   if (m.isGroup) {
-    if (groupMetaCache.has(m.chat)) {
-      meta = groupMetaCache.get(m.chat);
-    } else {
-      try {
-        meta = await sock.groupMetadata(m.chat);
-        groupMetaCache.set(m.chat, meta);
-        if (groupMetaCache.size > 30) {
-          const first = groupMetaCache.keys().next().value;
-          groupMetaCache.delete(first);
+    try {
+      if (groupMetaCache.has(m.chat)) {
+        meta = groupMetaCache.get(m.chat);
+      } else {
+        meta = await sock.groupMetadata(m.chat).catch(() => null);
+        if (meta) {
+          groupMetaCache.set(m.chat, meta);
+          if (groupMetaCache.size > 30) {
+            const first = groupMetaCache.keys().next().value;
+            groupMetaCache.delete(first);
+          }
         }
-      } catch (e) {}
-    }
+      }
 
-    if (meta) {
-      const admins = meta.participants
-        .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
-        .map(p => p.id);
-      
-      const sNum = sender.split('@')[0];
-      const bNum = sock.user.id.split(':')[0];
-      
-      isAdmin = admins.some(a => a.split('@')[0] === sNum);
-      isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
+      if (meta) {
+        const admins = meta.participants
+          .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
+          .map(p => p.id);
+        
+        const sNum = sender?.split('@')[0] || '';
+        const bNum = sock.user?.id?.split(':')[0] || '';
+        
+        isAdmin = admins.some(a => a.split('@')[0] === sNum);
+        isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
+      }
+    } catch (e) {
+      // Silent fail for metadata fetch
     }
   }
 
   const getMeta = async () => {
     if (!m.isGroup || meta) return;
-    
     try {
       meta = await sock.groupMetadata(m.chat);
       groupMetaCache.set(m.chat, meta);
@@ -255,8 +265,8 @@ module.exports = async (sock, m) => {
         .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
         .map(p => p.id);
       
-      const sNum = sender.split('@')[0];
-      const bNum = sock.user.id.split(':')[0];
+      const sNum = sender?.split('@')[0] || '';
+      const bNum = sock.user?.id?.split(':')[0] || '';
       
       isAdmin = admins.some(a => a.split('@')[0] === sNum);
       isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
@@ -271,13 +281,13 @@ module.exports = async (sock, m) => {
 
     isOwner,
     isSudo: isSudoUser,
-    isCreator: m.fromMe,
+    isCreator: isFromMe,
     isAdmin,
     isBotAdmin,
 
     isGroup: m.isGroup,
     sender,
-    senderNum: sender.split('@')[0].replace(/\D/g, ''),
+    senderNum: sender?.split('@')[0].replace(/\D/g, '') || '',
     chat: m.chat,
 
     participants: meta?.participants || [],
@@ -285,7 +295,6 @@ module.exports = async (sock, m) => {
     getGroupMetadata: getMeta,
 
     reply: (txt) => {
-      // Block any empty/null/whitespace-only reply from reaching WhatsApp
       if (txt === null || txt === undefined) return Promise.resolve();
       if (typeof txt === 'string' && !txt.trim()) return Promise.resolve();
       if (Buffer.isBuffer(txt) && txt.length === 0) return Promise.resolve();
@@ -298,13 +307,10 @@ module.exports = async (sock, m) => {
 
   loader.autoReveal(sock, m);
 
-  // --- Sticker bond handler ---
-  // Only process sticker messages; if no bond match, stop here (never fall to onText).
+  // Sticker bond handler
   if (m.message?.stickerMessage) {
     let hash = null;
 
-    // fileSha256 is a Uint8Array from protobuf — MUST use Buffer.from() before base64
-    // Direct .toString('base64') on Uint8Array gives "[object Uint8Array]" not real base64
     if (m.message.stickerMessage.fileSha256) {
       hash = Buffer.from(m.message.stickerMessage.fileSha256).toString('base64');
     } else if (m.msg?.fileSha256) {
@@ -329,17 +335,14 @@ module.exports = async (sock, m) => {
         return loader.exec(cmd, sock, m, ctx);
       }
     }
-    // Sticker with no bond — stop. Never trigger text handlers for stickers.
     return;
   }
 
-  // --- Guard: only proceed if message has real text ---
-  // This blocks ALL system/empty messages from reaching any plugin.
+  // Only proceed if there's actual text
   if (!body || !body.trim()) return;
 
   const pre = getPrefix(body);
   if (!pre) {
-    // Non-prefixed text message — run onText plugins (e.g. sp.js number selection)
     loader.onText(sock, m, ctx);
     return;
   }
