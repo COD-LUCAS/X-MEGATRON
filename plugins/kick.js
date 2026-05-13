@@ -1,7 +1,7 @@
 'use strict';
 
 module.exports = {
-  command: ['kick', 'remove'],
+  command: ['kick'],
   category: 'group',
   desc: 'Kick a member from the group',
   usage: '.kick (reply to user) | .kick @user',
