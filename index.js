@@ -162,54 +162,46 @@ const start = async () => {
     const raw = messages[0];
     if (!raw?.message) return;
 
-    // Dedup
-    if (seenIds.has(raw.key.id)) return;
-    seenIds.add(raw.key.id);
-    if (seenIds.size > 300) seenIds.delete(seenIds.values().next().value);
-
     // Unwrap ephemeral
-    raw.message = raw.message.ephemeralMessage?.message || raw.message;
+    if (raw.message.ephemeralMessage) {
+      raw.message = raw.message.ephemeralMessage.message;
+    }
 
     // Drop system types
     const mtype = Object.keys(raw.message)[0];
     if (SILENT_TYPES.has(mtype)) return;
     if (raw.messageStubType) return;
 
-    // fromMe filter
-    if (raw.key.fromMe) {
-      const isSticker = mtype === 'stickerMessage';
-      if (!isSticker) {
-        const body = (
-          raw.message?.conversation ||
-          raw.message?.extendedTextMessage?.text ||
-          raw.message?.imageMessage?.caption ||
-          raw.message?.videoMessage?.caption || ''
-        ).trim();
-        if (!body) return;
-        const pfx = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim()).filter(Boolean);
-        if (!pfx.some(p => body.startsWith(p))) return;
-      }
-      // fromMe passes — skip rate limit
-      try {
-        const { smsg } = require('./library/manager');
-        const m = smsg(sock, raw);
-        if (m) await handler(sock, m);
-      } catch (_) {}
-      return;
+    // IMPORTANT: For fromMe messages, skip dedup and rate limit
+    // This ensures bot commands work properly
+    if (!raw.key.fromMe) {
+      // Dedup only for incoming messages
+      if (seenIds.has(raw.key.id)) return;
+      seenIds.add(raw.key.id);
+      if (seenIds.size > 300) seenIds.delete(seenIds.values().next().value);
+
+      // Rate limit only for incoming messages
+      const rlKey = `${raw.key.participant || raw.key.remoteJid}::${raw.key.remoteJid}`;
+      const now   = Date.now();
+      if (rateMap.has(rlKey) && now - rateMap.get(rlKey) < RATE_MS) return;
+      rateMap.set(rlKey, now);
+      if (rateMap.size > 500) rateMap.delete(rateMap.keys().next().value);
     }
 
-    // Rate limit
-    const rlKey = `${raw.key.participant || raw.key.remoteJid}::${raw.key.remoteJid}`;
-    const now   = Date.now();
-    if (rateMap.has(rlKey) && now - rateMap.get(rlKey) < RATE_MS) return;
-    rateMap.set(rlKey, now);
-    if (rateMap.size > 500) rateMap.delete(rateMap.keys().next().value);
-
+    // Process all messages (both fromMe and others)
     try {
       const { smsg } = require('./library/manager');
       const m = smsg(sock, raw);
-      if (m) await handler(sock, m);
-    } catch (_) {}
+      if (m) {
+        // Log to see if messages are being received
+        if (raw.key.fromMe) {
+          log.debug(`Processing fromMe message in ${m.isGroup ? 'group' : 'private'}: ${m.body?.substring(0, 50)}`);
+        }
+        await handler(sock, m);
+      }
+    } catch (err) {
+      log.error(`Error handling message: ${err.message}`);
+    }
   });
 };
 
