@@ -125,7 +125,7 @@ module.exports = {
       if (fs.existsSync(DEFAULT_MENU_IMAGE)) {
         imageBuffer = fs.readFileSync(DEFAULT_MENU_IMAGE);
       } else {
-        imageBuffer = { url: "https://files.catbox.moe/33bsoh.png" };
+        imageBuffer = { url: "https://files.catbox.moe/a6pqf1.jpg" };
       }
 
       await sock.sendMessage(
