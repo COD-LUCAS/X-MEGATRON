@@ -52,17 +52,6 @@ const downloadMedia = async (message, type) => {
   }
 };
 
-// Simple image to sticker using wa-sticker-formatter
-const imageToSticker = async (buffer, packname, author) => {
-  const sticker = new Sticker(buffer, {
-    pack: packname,
-    author: author,
-    quality: 80,
-    type: 'full'
-  });
-  return await sticker.toBuffer();
-};
-
 module.exports = {
   command: ['take'],
   category: 'converter',
@@ -73,7 +62,6 @@ module.exports = {
     const { reply, args } = context;
     
     try {
-      // Check if replying to a message
       if (!m.quoted) {
         return reply('_Reply to a sticker, image, or video_');
       }
@@ -83,15 +71,14 @@ module.exports = {
         return reply('_Could not find quoted message_');
       }
 
-      // Get input
       const input = args.join(' ');
       if (!input) {
         return reply('_Usage:_\n_`.take packname`_\n_`.take packname;author`_');
       }
 
       const parts = input.split(';');
-      const packname = parts[0].trim();
-      const author = parts[1] ? parts[1].trim() : '';
+      let packname = parts[0].trim();
+      let author = parts[1] ? parts[1].trim() : '';
 
       if (!packname) {
         return reply('_Packname cannot be empty_');
@@ -100,62 +87,75 @@ module.exports = {
       await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } });
 
       let mediaBuffer = null;
-      let mediaType = null;
+      let stickerBuffer = null;
 
-      // Detect media type and download
+      // Handle sticker
       if (quotedMsg.stickerMessage) {
         mediaBuffer = await downloadMedia(quotedMsg.stickerMessage, 'sticker');
-        mediaType = 'sticker';
-      } else if (quotedMsg.imageMessage) {
+        if (mediaBuffer) {
+          const sticker = new Sticker(mediaBuffer, {
+            pack: packname,
+            author: author,
+            quality: 80,
+            type: 'full'
+          });
+          stickerBuffer = await sticker.toBuffer();
+        }
+      }
+      // Handle image
+      else if (quotedMsg.imageMessage) {
         mediaBuffer = await downloadMedia(quotedMsg.imageMessage, 'image');
-        mediaType = 'image';
-      } else if (quotedMsg.videoMessage) {
+        if (mediaBuffer) {
+          const sticker = new Sticker(mediaBuffer, {
+            pack: packname,
+            author: author,
+            quality: 80,
+            type: 'full'
+          });
+          stickerBuffer = await sticker.toBuffer();
+        }
+      }
+      // Handle video
+      else if (quotedMsg.videoMessage) {
         mediaBuffer = await downloadMedia(quotedMsg.videoMessage, 'video');
-        mediaType = 'video';
-      } else {
+        if (mediaBuffer) {
+          const sticker = new Sticker(mediaBuffer, {
+            pack: packname,
+            author: author,
+            quality: 80,
+            type: 'full',
+            process: 'smart'
+          });
+          stickerBuffer = await sticker.toBuffer();
+        }
+      }
+      else {
         await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
         return reply('_Reply to a sticker, image, or video_');
       }
 
-      if (!mediaBuffer) {
+      if (!mediaBuffer || !stickerBuffer) {
         await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
-        return reply('_Failed to download media_');
+        return reply('_Failed to process media_');
       }
-
-      let stickerBuffer;
-
-      // If it's already a sticker, just change metadata
-      if (mediaType === 'sticker') {
-        stickerBuffer = mediaBuffer;
-      } 
-      // If it's image or video, convert using wa-sticker-formatter
-      else {
-        stickerBuffer = await imageToSticker(mediaBuffer, packname, author);
-      }
-
-      // Apply packname/author to sticker
-      const finalSticker = new Sticker(stickerBuffer, {
-        pack: packname,
-        author: author,
-        quality: 80,
-        type: 'full'
-      });
-
-      const outputBuffer = await finalSticker.toBuffer();
 
       // Send the sticker
-      await sock.sendMessage(m.chat, { sticker: outputBuffer }, { quoted: m });
+      await sock.sendMessage(m.chat, { sticker: stickerBuffer }, { quoted: m });
       await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
 
       // Cleanup
       mediaBuffer = null;
       stickerBuffer = null;
-      outputBuffer = null;
 
     } catch (err) {
       console.error('Take error:', err);
       await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } }).catch(() => {});
-      reply(`_Failed: ${err.message}_`);
+      
+      let errorMsg = err.message;
+      if (errorMsg.includes('constant')) {
+        errorMsg = 'Internal error';
+      }
+      reply(`_Failed: ${errorMsg}_`);
     }
   }
 };
