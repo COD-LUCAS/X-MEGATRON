@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 
 const config = require('./config');
@@ -105,7 +104,7 @@ class Loader {
           delete require.cache[require.resolve(path.join(dir, file))];
           const p = require(path.join(dir, file));
           
-          if (!p?.command && !p?.onText) continue;
+          if (!p?.command && !p?.onText && !p?.handleText) continue;
 
           this.plugins.push(p);
 
@@ -114,7 +113,7 @@ class Loader {
             cmds.forEach(c => this.map.set(c.toLowerCase(), p));
           }
         } catch (e) {
-          // Silent fail
+          console.log(`Failed to load ${file}:`, e.message);
         }
       }
     }
@@ -124,6 +123,7 @@ class Loader {
     this.plugins = [];
     this.map.clear();
     this.load();
+    console.log('[LOADER] Hot reloaded —', this.map.size, 'commands');
   }
 
   exec(cmd, sock, m, ctx) {
@@ -146,10 +146,10 @@ class Loader {
     if (!ctx.text || !ctx.text.trim()) return;
 
     for (const p of this.plugins) {
-      if (!p.onText) continue;
+      if (!p.onText && !p.handleText) continue;
       if (p.handleText) {
         p.handleText(sock, m, ctx);
-      } else {
+      } else if (p.onText) {
         p.execute(sock, m, ctx);
       }
     }
@@ -330,14 +330,18 @@ module.exports = async (sock, m) => {
     return;
   }
 
+  // Only proceed if there's actual text
   if (!body || !body.trim()) return;
 
   const pre = getPrefix(body);
+  
+  // If no prefix, handle as text message
   if (!pre) {
     loader.onText(sock, m, ctx);
     return;
   }
 
+  // Parse command
   const parts = body.slice(pre.length).trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase();
   if (!cmd) return;
