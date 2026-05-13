@@ -113,7 +113,7 @@ class Loader {
             cmds.forEach(c => this.map.set(c.toLowerCase(), p));
           }
         } catch (e) {
-          console.log(`Failed to load ${file}:`, e.message);
+          // Silent fail
         }
       }
     }
@@ -123,7 +123,6 @@ class Loader {
     this.plugins = [];
     this.map.clear();
     this.load();
-    console.log('[LOADER] Hot reloaded —', this.map.size, 'commands');
   }
 
   exec(cmd, sock, m, ctx) {
@@ -172,16 +171,13 @@ module.exports = async (sock, m) => {
   if (m.key.remoteJid === 'status@broadcast') return;
   if (m.isSystem) return;
 
-  // Determine if this is from the bot itself EARLY
   const isFromMe = m.fromMe === true;
   
-  // Ban check - allow owner to unban from banned chat
+  // Ban check
   try {
     const { isBanned } = require('./plugins/ban');
     if (isBanned(m.chat)) {
-      // Allow fromMe or owner to unban
       if (!isFromMe) {
-        // Check if sender is owner
         const sudoList = loadSudo();
         const senderNum = m.sender?.split('@')[0] || '';
         const isOwnerNum = sudoList.some(s => senderNum === s.replace(/\D/g, ''));
@@ -203,12 +199,10 @@ module.exports = async (sock, m) => {
   if (!sender && !isFromMe) return;
 
   const sudoList = loadSudo();
-  // FIXED: isOwner should be TRUE for fromMe messages
   const isOwner = isFromMe || isSudo(sender, sudoList);
   const isSudoUser = !isFromMe && isSudo(sender, sudoList);
 
   const mode = (process.env.MODE || 'public').toLowerCase();
-  // FIXED: Allow fromMe messages in all modes
   if (!isFromMe) {
     if (mode === 'private' && !isOwner) return;
     if (mode === 'group' && !m.isGroup && !isOwner) return;
@@ -219,7 +213,6 @@ module.exports = async (sock, m) => {
   let isAdmin = false;
   let isBotAdmin = false;
 
-  // Fetch group metadata for groups
   if (m.isGroup) {
     try {
       if (groupMetaCache.has(m.chat)) {
@@ -246,9 +239,7 @@ module.exports = async (sock, m) => {
         isAdmin = admins.some(a => a.split('@')[0] === sNum);
         isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
       }
-    } catch (e) {
-      // Silent fail for metadata fetch
-    }
+    } catch (_) {}
   }
 
   const getMeta = async () => {
@@ -270,7 +261,7 @@ module.exports = async (sock, m) => {
       
       isAdmin = admins.some(a => a.split('@')[0] === sNum);
       isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
-    } catch (e) {}
+    } catch (_) {}
   };
 
   const ctx = {
@@ -338,7 +329,6 @@ module.exports = async (sock, m) => {
     return;
   }
 
-  // Only proceed if there's actual text
   if (!body || !body.trim()) return;
 
   const pre = getPrefix(body);
