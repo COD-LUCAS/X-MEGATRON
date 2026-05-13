@@ -1,249 +1,252 @@
-
 'use strict';
 
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
+const fs    = require('fs');
+const path  = require('path');
 
 const EXT_DIR = path.join(__dirname, '..', 'database', 'external_plugins');
 const DB_FILE = path.join(__dirname, '..', 'database', 'extplugins.txt');
 
-// Ensure directories exist
 const ensureDirs = () => {
   if (!fs.existsSync(EXT_DIR)) fs.mkdirSync(EXT_DIR, { recursive: true });
   if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, '');
 };
 
-// Get all plugins
-const getPlugins = () => {
+const readDB = () => {
   ensureDirs();
-  const content = fs.readFileSync(DB_FILE, 'utf8');
-  if (!content.trim()) return [];
-  
-  return content.split('\n')
-    .filter(line => line.trim())
-    .map(line => {
-      const [name, url, filename] = line.split('|');
-      return { name, url, filename };
-    });
+  return fs.readFileSync(DB_FILE, 'utf8')
+    .split('\n').filter(l => l.trim())
+    .map(l => { const [name, url, filename] = l.split('|'); return { name, url, filename }; });
 };
 
-// Save plugin
-const savePlugin = (name, url, filename) => {
-  const plugins = getPlugins();
-  const filtered = plugins.filter(p => p.name !== name);
-  filtered.push({ name, url, filename });
-  
-  const content = filtered.map(p => `${p.name}|${p.url}|${p.filename}`).join('\n');
-  fs.writeFileSync(DB_FILE, content + (content ? '\n' : ''));
+const writeDB = (plugins) => {
+  fs.writeFileSync(DB_FILE, plugins.map(p => `${p.name}|${p.url}|${p.filename}`).join('\n') + (plugins.length ? '\n' : ''));
 };
 
-// Delete plugin
-const deletePlugin = (name) => {
-  const plugins = getPlugins();
-  const filtered = plugins.filter(p => p.name !== name);
-  
-  if (filtered.length === 0) {
-    fs.writeFileSync(DB_FILE, '');
-  } else {
-    const content = filtered.map(p => `${p.name}|${p.url}|${p.filename}`).join('\n');
-    fs.writeFileSync(DB_FILE, content + '\n');
-  }
-};
+const addDB    = (name, url, filename) => { ensureDirs(); fs.appendFileSync(DB_FILE, `${name}|${url}|${filename}\n`); };
+const removeDB = (name) => writeDB(readDB().filter(p => p.name !== name));
 
-// Get raw URL from GitHub/Gist
-const getRawUrl = async (url) => {
+// Resolve raw URL from GitHub/Gist links
+const rawUrl = async (url) => {
   if (url.includes('gist.github.com')) {
-    const id = url.split('/').pop().split('?')[0];
+    const id  = url.split('/').pop().split('?')[0];
     const res = await axios.get(`https://api.github.com/gists/${id}`);
-    const files = Object.values(res.data.files);
-    if (files.length === 0) throw new Error('No files in gist');
-    return files[0].raw_url;
+    return Object.values(res.data.files)[0].raw_url;
   }
-  if (url.includes('github.com') && url.includes('/blob/')) {
+  if (url.includes('github.com') && url.includes('/blob/'))
     return url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/');
-  }
   return url;
 };
 
-// Validate plugin
-const validatePlugin = (code) => {
+// Validate plugin code — must match X-MEGATRON plugin format
+const validate = (code) => {
   try {
-    if (!code.includes('module.exports')) {
-      return { ok: false, err: 'Missing module.exports' };
-    }
-    
+    if (!code.includes('module.exports')) return { ok: false, err: 'Missing module.exports' };
+    if (!code.includes('execute'))        return { ok: false, err: 'Missing execute function' };
+
     const mod = { exports: {} };
     new Function('module', 'exports', 'require', code)(mod, mod.exports, require);
     const p = mod.exports;
-    
-    if (!p.command && !p.onText) {
-      return { ok: false, err: 'Missing command or onText' };
-    }
-    
-    let name = 'listener';
-    if (p.command) {
-      name = Array.isArray(p.command) ? p.command[0] : p.command;
-    }
-    
-    return { ok: true, name };
+
+    if (typeof p.execute !== 'function') return { ok: false, err: 'execute must be a function' };
+    if (!p.command && !p.onText)         return { ok: false, err: 'Missing command or onText' };
+
+    const cmds = p.command
+      ? (Array.isArray(p.command) ? p.command : [p.command])
+      : ['listener'];
+
+    return { ok: true, cmds, plugin: p };
   } catch (e) {
     return { ok: false, err: e.message };
   }
 };
 
-// Hot reload
-const reloadPlugins = () => {
+// Save as first_command.js (e.g. "ping" → "ping.js")
+const makeFilename = (cmds, url) => {
+  if (cmds?.length && cmds[0] !== 'listener') {
+    return `${cmds[0].replace(/[^a-z0-9_-]/gi, '')}.js`;
+  }
+  const parts = url.split('/');
+  let name = parts[parts.length - 1].split('?')[0];
+  if (!name.endsWith('.js')) name = `plugin_${Date.now()}.js`;
+  return name;
+};
+
+// Hot reload — no restart needed
+const hotReload = () => {
   try {
-    if (global.pluginLoader && typeof global.pluginLoader.reload === 'function') {
+    if (global.pluginLoader?.reload) {
       global.pluginLoader.reload();
       return true;
     }
-  } catch (e) {}
+  } catch (_) {}
   return false;
 };
 
 module.exports = {
-  command: ['install', 'plugins', 'remove'],
+  command: ['install', 'plugins', 'remove', 'plugin', 'gistupdate'],
   category: 'owner',
-  desc: 'Install and manage external plugins',
-  usage: '.install <gist_url> | .plugins | .remove <plugin_name>',
+  desc: 'Install and manage external plugins — no restart needed',
+  usage: '.install <url> | .plugins | .remove <name> | .plugin <name> | .gistupdate <name>',
+  owner: true,
 
   async execute(sock, m, context) {
-    const { command, text, isOwner, prefix } = context;
-    
-    if (!isOwner) return;
+    const { command, text } = context;
+    ensureDirs();
 
-    // ──────────────────────────────────────────────────────────
-    // INSTALL PLUGIN
-    // ──────────────────────────────────────────────────────────
+    // ── INSTALL ───────────────────────────────────────────────
     if (command === 'install') {
-      if (!text) {
-        return m.reply(`_Usage: ${prefix}install <gist_url>_`);
-      }
+      if (!text) return m.reply(
+        `_Usage: ${context.prefix}install <url>_\n\n` +
+        `_Supports: GitHub Gist, raw.githubusercontent.com, GitHub blob_`
+      );
 
-      const status = await m.reply('_Downloading..._');
-      const url = text.trim();
+      const url    = text.trim();
+      const status = await m.reply('_⬇️ Downloading..._');
 
       try {
-        const rawUrl = await getRawUrl(url);
-        const response = await axios.get(rawUrl, { timeout: 15000 });
-        const code = response.data;
+        const rUrl = await rawUrl(url);
+        const code = (await axios.get(rUrl, { timeout: 15000 })).data;
 
-        await sock.sendMessage(m.chat, { text: '_Validating..._', edit: status.key });
+        await sock.sendMessage(m.chat, { text: '_🔍 Validating..._', edit: status.key });
 
-        const validation = validatePlugin(code);
-        if (!validation.ok) {
+        const v = validate(code);
+        if (!v.ok) {
           return sock.sendMessage(m.chat, {
-            text: `_Invalid plugin_\n_${validation.err}_`,
+            text: `_❌ Invalid plugin_\n*Error:* _${v.err}_\n\n_Must follow X-MEGATRON plugin format_`,
             edit: status.key,
           });
         }
 
-        const pluginName = validation.name;
-        const filename = `${pluginName}.js`;
-        const filepath = path.join(EXT_DIR, filename);
+        // Save as commandname.js — not random
+        const filename   = makeFilename(v.cmds, url);
+        const pluginPath = path.join(EXT_DIR, filename);
 
-        // Remove old if exists
-        const existing = getPlugins().find(p => p.name === pluginName);
-        if (existing) {
-          const oldPath = path.join(EXT_DIR, existing.filename);
-          if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+        // If same file exists, overwrite (update)
+        fs.writeFileSync(pluginPath, code, 'utf8');
+
+        const cmdName = v.cmds[0];
+
+        // Remove old DB entry if same command existed, add new
+        const existing = readDB();
+        const oldEntry = existing.find(p => p.name === cmdName);
+        if (oldEntry) removeDB(cmdName);
+        addDB(cmdName, url, filename);
+
+        // Hot reload — works instantly, no restart needed
+        const reloaded = hotReload();
+
+        await sock.sendMessage(m.chat, {
+          text:
+            `_✅ Installed: *${v.cmds.join(', ')}*_\n\n` +
+            (reloaded
+              ? `_Plugin loaded instantly — use *${context.prefix}${cmdName}* now ✓_`
+              : `_Restart bot to activate plugin_`),
+          edit: status.key,
+        });
+
+      } catch (e) {
+        await sock.sendMessage(m.chat, {
+          text: `_❌ Install failed_\n_${e.message}_`,
+          edit: status.key,
+        });
+      }
+    }
+
+    // ── PLUGINS LIST ──────────────────────────────────────────
+    if (command === 'plugins') {
+      const list = readDB();
+      if (!list.length) return m.reply('_No external plugins installed_');
+
+      let txt = `_*EXTERNAL PLUGINS* — ${list.length}_\n\n`;
+      list.forEach((p, i) => {
+        txt += `${i + 1}. *${p.name}*_\n_`;
+      });
+      txt += `_Use .plugin <name> for details_`;
+      return m.reply(txt);
+    }
+
+    // ── REMOVE ────────────────────────────────────────────────
+    if (command === 'remove') {
+      if (!text) return m.reply(`_Usage: ${context.prefix}remove <name>_`);
+
+      const name   = text.trim().toLowerCase();
+      const plugin = readDB().find(p => p.name.toLowerCase().includes(name));
+      if (!plugin) return m.reply('_Plugin not found — use .plugins to list_');
+
+      const fp = path.join(EXT_DIR, plugin.filename);
+      if (fs.existsSync(fp)) fs.unlinkSync(fp);
+      removeDB(plugin.name);
+
+      const reloaded = hotReload();
+      return m.reply(
+        `_✅ Removed: ${plugin.name}_\n` +
+        (reloaded ? `_Unloaded instantly ✓_` : `_Restart to fully unload_`)
+      );
+    }
+
+    // ── PLUGIN INFO ───────────────────────────────────────────
+    if (command === 'plugin') {
+      if (!text) return m.reply(`_Usage: ${context.prefix}plugin <name>_`);
+
+      const name   = text.trim().toLowerCase();
+      const plugin = readDB().find(p => p.name.toLowerCase().includes(name));
+      if (!plugin) return m.reply('_Plugin not found_');
+
+      return m.reply(
+        `_*Plugin:* ${plugin.name}_\n\n` +
+        `_*URL:*_\n${plugin.url}`
+      );
+    }
+
+    // ── GIST UPDATE ───────────────────────────────────────────
+    if (command === 'gistupdate') {
+      if (!text) return m.reply(`_Usage: ${context.prefix}gistupdate <name>_`);
+
+      const name   = text.trim().toLowerCase();
+      const plugin = readDB().find(p => p.name.toLowerCase().includes(name));
+      if (!plugin) return m.reply('_Plugin not found — use .plugins to list_');
+
+      const status = await m.reply(`_🔄 Updating ${plugin.name}..._`);
+
+      try {
+        const rUrl = await rawUrl(plugin.url);
+        const code = (await axios.get(rUrl, { timeout: 15000 })).data;
+
+        await sock.sendMessage(m.chat, { text: '_🔍 Validating..._', edit: status.key });
+
+        const v = validate(code);
+        if (!v.ok) {
+          return sock.sendMessage(m.chat, {
+            text: `_❌ Update failed_\n*Error:* _${v.err}_`,
+            edit: status.key,
+          });
         }
 
-        // Save new plugin
-        fs.writeFileSync(filepath, code, 'utf8');
-        savePlugin(pluginName, url, filename);
+        const fp = path.join(EXT_DIR, plugin.filename);
+        if (fs.existsSync(fp)) fs.unlinkSync(fp);
 
-        const reloaded = reloadPlugins();
+        const filename = makeFilename(v.cmds, plugin.url);
+        fs.writeFileSync(path.join(EXT_DIR, filename), code, 'utf8');
+
+        removeDB(plugin.name);
+        addDB(v.cmds[0], plugin.url, filename);
+
+        const reloaded = hotReload();
 
         await sock.sendMessage(m.chat, {
-          text: `_Installed: ${pluginName}_\n${reloaded ? '_Ready to use_' : '_Restart to activate_'}`,
+          text:
+            `_✅ Updated: *${v.cmds.join(', ')}*_\n` +
+            (reloaded ? `_Reloaded instantly ✓_` : `_Restart to reload_`),
           edit: status.key,
         });
 
-      } catch (err) {
+      } catch (e) {
         await sock.sendMessage(m.chat, {
-          text: `_Install failed_\n_${err.message}_`,
+          text: `_❌ Update failed_\n_${e.message}_`,
           edit: status.key,
         });
       }
-    }
-
-    // ──────────────────────────────────────────────────────────
-    // LIST PLUGINS
-    // ──────────────────────────────────────────────────────────
-    if (command === 'plugins') {
-      const plugins = getPlugins();
-      
-      if (plugins.length === 0) {
-        return m.reply('_No plugins installed_');
-      }
-      
-      let msg = `_Installed plugins (${plugins.length})_\n\n`;
-      plugins.forEach((p, i) => {
-        msg += `_${i + 1}. ${p.name}_\n`;
-      });
-      msg += `\n_Use ${prefix}remove <name> to remove_`;
-      
-      return m.reply(msg);
-    }
-
-    // ──────────────────────────────────────────────────────────
-    // REMOVE PLUGIN
-    // ──────────────────────────────────────────────────────────
-    if (command === 'remove') {
-      const plugins = getPlugins();
-      
-      if (plugins.length === 0) {
-        return m.reply('_No plugins installed_');
-      }
-      
-      if (!text) {
-        let msg = `_Remove a plugin_\n\n_Usage: ${prefix}remove <plugin_name>_\n\n_Installed:_\n`;
-        plugins.forEach((p, i) => {
-          msg += `_${i + 1}. ${p.name}_\n`;
-        });
-        return m.reply(msg);
-      }
-      
-      const searchName = text.trim();
-      
-      // Find plugin
-      let target = plugins.find(p => p.name === searchName);
-      if (!target) {
-        target = plugins.find(p => p.name.toLowerCase() === searchName.toLowerCase());
-      }
-      
-      if (!target) {
-        let msg = `_Plugin "${searchName}" not found_\n\n_Installed:_\n`;
-        plugins.forEach((p, i) => {
-          msg += `_${i + 1}. ${p.name}_\n`;
-        });
-        return m.reply(msg);
-      }
-      
-      // Delete file
-      const filepath = path.join(EXT_DIR, target.filename);
-      if (fs.existsSync(filepath)) {
-        fs.unlinkSync(filepath);
-      }
-      
-      // Delete from database
-      deletePlugin(target.name);
-      
-      // Verify deletion
-      const afterDelete = getPlugins();
-      const stillExists = afterDelete.find(p => p.name === target.name);
-      
-      if (stillExists) {
-        return m.reply(`_Failed to remove ${target.name}_`);
-      }
-      
-      // Reload
-      const reloaded = reloadPlugins();
-      
-      return m.reply(`_Removed: ${target.name}_\n${reloaded ? '_Unloaded_' : '_Restart to complete_'}`);
     }
   },
 };
