@@ -1,4 +1,3 @@
-
 'use strict';
 
 const axios = require('axios');
@@ -28,16 +27,17 @@ const getPlugins = () => {
 
 const savePlugin = (name, url, filename) => {
   const plugins = getPlugins();
-  const filtered = plugins.filter(p => p.name !== name);
+  const filtered = plugins.filter(p => p.name !== name && p.url !== url);
   filtered.push({ name, url, filename });
   
   const content = filtered.map(p => `${p.name}|${p.url}|${p.filename}`).join('\n');
   fs.writeFileSync(DB_FILE, content + (content ? '\n' : ''));
 };
 
-const deletePlugin = (name) => {
+const deletePlugin = (identifier) => {
   const plugins = getPlugins();
-  const filtered = plugins.filter(p => p.name !== name);
+  // Delete by name or URL
+  const filtered = plugins.filter(p => p.name !== identifier && p.url !== identifier);
   
   if (filtered.length === 0) {
     fs.writeFileSync(DB_FILE, '');
@@ -61,31 +61,24 @@ const getRawUrl = async (url) => {
   return url;
 };
 
-// Convert ES Module to CommonJS
 const convertToCommonJS = (code) => {
   let converted = code;
   
-  // Add missing requires for common globals
-  if (converted.includes('__dirname') && !converted.includes('path = require')) {
+  if (converted.includes('__dirname') && !converted.includes('require(\'path\')')) {
     converted = "const path = require('path');\n" + converted;
   }
-  if (converted.includes('__filename') && !converted.includes('path = require')) {
-    converted = "const path = require('path');\n" + converted;
-  }
-  if (converted.includes('fs.') && !converted.includes('fs = require')) {
+  if (converted.includes('fs.') && !converted.includes('require(\'fs\')')) {
     converted = "const fs = require('fs');\n" + converted;
   }
-  if (converted.includes('axios.') && !converted.includes('axios = require')) {
+  if (converted.includes('axios.') && !converted.includes('require(\'axios\')')) {
     converted = "const axios = require('axios');\n" + converted;
   }
   
-  // Convert export default
   converted = converted.replace(/export\s+default\s+{/g, 'module.exports = {');
   converted = converted.replace(/export\s+default\s+/g, 'module.exports = ');
   converted = converted.replace(/export\s+const/g, 'const');
   converted = converted.replace(/export\s+function/g, 'function');
   
-  // Convert import statements
   converted = converted.replace(/import\s+{([^}]+)}\s+from\s+['"]([^'"]+)['"]/g, (match, imports, module) => {
     const vars = imports.split(',').map(i => i.trim());
     const requires = vars.map(v => `const ${v} = require('${module}').${v};`).join('\n');
@@ -94,54 +87,41 @@ const convertToCommonJS = (code) => {
   
   converted = converted.replace(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, 'const $1 = require(\'$2\');');
   
-  // Fix __dirname and __filename
-  converted = converted.replace(/__dirname/g, '__dirname');
-  converted = converted.replace(/__filename/g, '__filename');
-  
   return converted;
 };
 
-// Validate and convert plugin
 const processPlugin = (code) => {
-  try {
-    let finalCode = code;
-    let pluginName = 'listener';
-    let isESModule = false;
-    
-    // Check if it's ES Module
-    if (code.includes('import ') || code.includes('export default') || code.includes('export {')) {
-      isESModule = true;
-      finalCode = convertToCommonJS(code);
-    }
-    
-    // Extract plugin name
-    const nameMatch = finalCode.match(/command:\s*\[['"](.+?)['"]\]/);
-    if (nameMatch) {
-      pluginName = nameMatch[1];
-    } else {
-      const cmdMatch = finalCode.match(/command:\s*['"](.+?)['"]/);
-      if (cmdMatch) pluginName = cmdMatch[1];
-    }
-    
-    // Validate final code
-    if (!finalCode.includes('module.exports')) {
-      throw new Error('Missing module.exports');
-    }
-    
-    // Test execute the plugin
-    const mod = { exports: {} };
-    const wrappedFunc = new Function('module', 'exports', 'require', finalCode);
-    wrappedFunc(mod, mod.exports, require);
-    const p = mod.exports;
-    
-    if (!p.command && !p.onText) {
-      throw new Error('Missing command or onText');
-    }
-    
-    return { ok: true, name: pluginName, code: finalCode };
-  } catch (e) {
-    return { ok: false, err: e.message };
+  let finalCode = code;
+  let pluginName = 'listener';
+  
+  const isESModule = code.includes('import ') || code.includes('export default') || code.includes('export {');
+  
+  if (isESModule) {
+    finalCode = convertToCommonJS(code);
   }
+  
+  const nameMatch = finalCode.match(/command:\s*\[['"](.+?)['"]\]/);
+  if (nameMatch) {
+    pluginName = nameMatch[1];
+  } else {
+    const cmdMatch = finalCode.match(/command:\s*['"](.+?)['"]/);
+    if (cmdMatch) pluginName = cmdMatch[1];
+  }
+  
+  if (!finalCode.includes('module.exports')) {
+    throw new Error('Invalid plugin format');
+  }
+  
+  const mod = { exports: {} };
+  const wrappedFunc = new Function('module', 'exports', 'require', finalCode);
+  wrappedFunc(mod, mod.exports, require);
+  const p = mod.exports;
+  
+  if (!p.command && !p.onText) {
+    throw new Error('Missing command or onText');
+  }
+  
+  return { ok: true, name: pluginName, code: finalCode };
 };
 
 const reloadPlugins = () => {
@@ -157,15 +137,15 @@ const reloadPlugins = () => {
 module.exports = {
   command: ['install', 'plugins', 'remove'],
   category: 'owner',
-  desc: 'Install and manage external plugins',
-  usage: '.install <url> | .plugins | .remove <name>',
+  desc: 'Install and manage plugins',
+  usage: '.install <url> | .plugins | .remove <name_or_url>',
 
   async execute(sock, m, context) {
     const { command, text, isOwner, prefix } = context;
     
     if (!isOwner) return;
 
-    // INSTALL PLUGIN
+    // INSTALL
     if (command === 'install') {
       if (!text) {
         return m.reply(`_Usage: ${prefix}install <url>_`);
@@ -179,13 +159,13 @@ module.exports = {
         const response = await axios.get(rawUrl, { timeout: 15000 });
         const originalCode = response.data;
 
-        await sock.sendMessage(m.chat, { text: '_Processing..._', edit: status.key });
+        await sock.sendMessage(m.chat, { text: '_Converting..._', edit: status.key });
 
         const result = processPlugin(originalCode);
         
         if (!result.ok) {
           return sock.sendMessage(m.chat, {
-            text: `_${result.err}_`,
+            text: `_Failed: ${result.err}_`,
             edit: status.key,
           });
         }
@@ -194,18 +174,15 @@ module.exports = {
         const filename = `${pluginName}.js`;
         const filepath = path.join(EXT_DIR, filename);
 
-        // Remove old if exists
         const existing = getPlugins().find(p => p.name === pluginName);
         if (existing) {
           const oldPath = path.join(EXT_DIR, existing.filename);
           if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
         }
 
-        // Save new plugin
         fs.writeFileSync(filepath, result.code, 'utf8');
         savePlugin(pluginName, url, filename);
-
-        const reloaded = reloadPlugins();
+        reloadPlugins();
 
         await sock.sendMessage(m.chat, {
           text: `_Installed: ${pluginName}_`,
@@ -214,13 +191,13 @@ module.exports = {
 
       } catch (err) {
         await sock.sendMessage(m.chat, {
-          text: `_${err.message}_`,
+          text: `_Failed: ${err.message}_`,
           edit: status.key,
         });
       }
     }
 
-    // LIST PLUGINS
+    // LIST PLUGINS - Shows name AND Gist URL
     if (command === 'plugins') {
       const plugins = getPlugins();
       
@@ -228,16 +205,17 @@ module.exports = {
         return m.reply('_No plugins installed_');
       }
       
-      let msg = `_Installed (${plugins.length})_\n\n`;
+      let msg = `_📦 Installed plugins (${plugins.length})_\n\n`;
       plugins.forEach((p, i) => {
         msg += `_${i + 1}. ${p.name}_\n`;
+        msg += `_   URL: ${p.url}_\n\n`;
       });
-      msg += `\n_Use ${prefix}remove <name> to remove_`;
+      msg += `_Use ${prefix}remove <name_or_url> to remove_`;
       
       return m.reply(msg);
     }
 
-    // REMOVE PLUGIN
+    // REMOVE - Works with name OR Gist URL
     if (command === 'remove') {
       const plugins = getPlugins();
       
@@ -246,38 +224,50 @@ module.exports = {
       }
       
       if (!text) {
-        let msg = `_Remove a plugin_\n\n_Usage: ${prefix}remove <name>_\n\n_Installed:_\n`;
+        let msg = `_🗑 Remove a plugin_\n\n_Usage: ${prefix}remove <name_or_url>_\n\n_Installed:_\n`;
+        plugins.forEach((p, i) => {
+          msg += `_${i + 1}. ${p.name}_\n`;
+          msg += `_   ${p.url}_\n\n`;
+        });
+        return m.reply(msg);
+      }
+      
+      const identifier = text.trim();
+      
+      // Find by name or URL
+      let target = plugins.find(p => p.name === identifier);
+      if (!target) target = plugins.find(p => p.url === identifier);
+      if (!target) target = plugins.find(p => p.url.includes(identifier));
+      if (!target) target = plugins.find(p => p.name.toLowerCase() === identifier.toLowerCase());
+      
+      if (!target) {
+        let msg = `_"${identifier}" not found_\n\n_Installed:_\n`;
         plugins.forEach((p, i) => {
           msg += `_${i + 1}. ${p.name}_\n`;
         });
         return m.reply(msg);
       }
       
-      const searchName = text.trim();
-      
-      let target = plugins.find(p => p.name === searchName);
-      if (!target) {
-        target = plugins.find(p => p.name.toLowerCase() === searchName.toLowerCase());
-      }
-      
-      if (!target) {
-        let msg = `_"${searchName}" not found_\n\n_Installed:_\n`;
-        plugins.forEach((p, i) => {
-          msg += `_${i + 1}. ${p.name}_\n`;
-        });
-        return m.reply(msg);
-      }
-      
+      // Delete the file
       const filepath = path.join(EXT_DIR, target.filename);
       if (fs.existsSync(filepath)) {
         fs.unlinkSync(filepath);
       }
       
+      // Delete from database
       deletePlugin(target.name);
       
-      const reloaded = reloadPlugins();
+      // Verify deletion
+      const afterDelete = getPlugins();
+      const stillExists = afterDelete.find(p => p.name === target.name);
       
-      return m.reply(`_Removed: ${target.name}_`);
+      if (stillExists) {
+        return m.reply(`_Failed to remove ${target.name}_`);
+      }
+      
+      reloadPlugins();
+      
+      return m.reply(`_Removed: ${target.name}_\n_URL: ${target.url}_`);
     }
   }
 };
