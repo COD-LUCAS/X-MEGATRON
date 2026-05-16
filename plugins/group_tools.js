@@ -28,7 +28,7 @@ const saveGlobalSettings = (settings) => {
 
 module.exports = {
   command: ['anticall'],
-  category: 'group',
+  category: 'ANTI-FUNCTIONS',
   desc: 'Reject incoming calls automatically',
   usage: '.anticall on/off/status',
 
