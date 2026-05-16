@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 
 const config = require('./config');
@@ -171,10 +172,12 @@ module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
   if (m.key.remoteJid === 'status@broadcast') return;
   if (m.isSystem) return;
+  
+  // Block empty body messages
+  if (!m.body || m.body.trim() === '' || m.body === '_') return;
 
   const isFromMe = m.fromMe === true;
   
-  // Ban check
   try {
     const { isBanned } = require('./plugins/ban');
     if (isBanned(m.chat)) {
@@ -299,7 +302,6 @@ module.exports = async (sock, m) => {
 
   loader.autoReveal(sock, m);
 
-  // Sticker bond handler
   if (m.message?.stickerMessage) {
     let hash = null;
 
@@ -330,18 +332,15 @@ module.exports = async (sock, m) => {
     return;
   }
 
-  // Only proceed if there's actual text
   if (!body || !body.trim()) return;
 
   const pre = getPrefix(body);
   
-  // If no prefix, handle as text message
   if (!pre) {
     loader.onText(sock, m, ctx);
     return;
   }
 
-  // Parse command
   const parts = body.slice(pre.length).trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase();
   if (!cmd) return;
