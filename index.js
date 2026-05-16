@@ -172,15 +172,27 @@ const start = async () => {
     if (SILENT_TYPES.has(mtype)) return;
     if (raw.messageStubType) return;
 
-    // IMPORTANT: For fromMe messages, skip dedup and rate limit
-    // This ensures bot commands work properly
+    // Block empty messages
+    let messageContent = null;
+    if (raw.message.conversation) {
+      messageContent = raw.message.conversation;
+    } else if (raw.message.extendedTextMessage?.text) {
+      messageContent = raw.message.extendedTextMessage.text;
+    } else if (raw.message.imageMessage?.caption) {
+      messageContent = raw.message.imageMessage.caption;
+    } else if (raw.message.videoMessage?.caption) {
+      messageContent = raw.message.videoMessage.caption;
+    }
+    
+    if (!messageContent || messageContent.trim() === '' || messageContent === '_') {
+      return;
+    }
+
     if (!raw.key.fromMe) {
-      // Dedup only for incoming messages
       if (seenIds.has(raw.key.id)) return;
       seenIds.add(raw.key.id);
       if (seenIds.size > 300) seenIds.delete(seenIds.values().next().value);
 
-      // Rate limit only for incoming messages
       const rlKey = `${raw.key.participant || raw.key.remoteJid}::${raw.key.remoteJid}`;
       const now   = Date.now();
       if (rateMap.has(rlKey) && now - rateMap.get(rlKey) < RATE_MS) return;
@@ -188,17 +200,10 @@ const start = async () => {
       if (rateMap.size > 500) rateMap.delete(rateMap.keys().next().value);
     }
 
-    // Process all messages (both fromMe and others)
     try {
       const { smsg } = require('./library/manager');
       const m = smsg(sock, raw);
-      if (m) {
-        // Log to see if messages are being received
-        if (raw.key.fromMe) {
-          log.debug(`Processing fromMe message in ${m.isGroup ? 'group' : 'private'}: ${m.body?.substring(0, 50)}`);
-        }
-        await handler(sock, m);
-      }
+      if (m) await handler(sock, m);
     } catch (err) {
       log.error(`Error handling message: ${err.message}`);
     }
