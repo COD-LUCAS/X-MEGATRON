@@ -1,6 +1,6 @@
 module.exports = {
   command: ['jid'],
-  category: 'utility',
+  category: 'misc',
   desc: 'Get JID of chat, replied user, or mentioned user',
   owner: true,
 
