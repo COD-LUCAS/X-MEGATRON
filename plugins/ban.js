@@ -11,7 +11,7 @@ const isBanned = (jid) => !!readBans()[jid];
 
 module.exports = {
   command: ['ban', 'unban', 'listban'],
-  category: 'owner',
+  category: 'app',
   desc: 'Ban/unban a PM or group from using the bot',
   usage: '.ban | .unban | .listban',
   owner: true,
