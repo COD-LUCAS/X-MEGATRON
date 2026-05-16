@@ -1,12 +1,10 @@
+
 const {
   jidNormalizedUser,
   getContentType,
   downloadContentFromMessage
 } = require('@itsliaaa/baileys')
 
-// Message types that never carry real user text.
-// If getContentType() returns one of these, m.body will always be '' and
-// no plugin should ever respond to them.
 const SYSTEM_TYPES = new Set([
   'protocolMessage',
   'senderKeyDistributionMessage',
@@ -29,7 +27,6 @@ const smsg = (sock, m) => {
   m.isGroup = m.chat.endsWith('@g.us')
   m.sender = jidNormalizedUser(m.fromMe ? sock.user.id : (m.key.participant || m.chat))
 
-  // Preserve pushName from raw message object
   m.pushName = m.pushName || 'User'
 
   if (!m.message) return m
@@ -37,7 +34,6 @@ const smsg = (sock, m) => {
   m.mtype = getContentType(m.message)
   m.msg = m.message[m.mtype]
 
-  // Mark system messages so main.js can drop them immediately
   if (SYSTEM_TYPES.has(m.mtype)) {
     m.isSystem = true
     m.body = ''
@@ -96,15 +92,18 @@ const smsg = (sock, m) => {
     }
   }
 
-  // NULL-SAFE REPLY — text only, silently blocks all empty/invalid sends
-  // For media (image/video/audio) use sock.sendMessage() directly in plugins
+  // NULL-SAFE REPLY — blocks all empty/invalid messages
   m.reply = (text) => {
     if (text === null || text === undefined) return Promise.resolve()
     if (typeof text !== 'string') return Promise.resolve()
-    const trimmed = text.trim()
-    if (!trimmed) return Promise.resolve()
+    if (text.trim() === '') return Promise.resolve()
+    if (text === '_') return Promise.resolve()
+    
+    const cleanText = text.replace(/[_\*~`]/g, '').trim()
+    if (cleanText === '') return Promise.resolve()
+    
     try {
-      return sock.sendMessage(m.chat, { text: trimmed }, { quoted: m })
+      return sock.sendMessage(m.chat, { text: text.trim() }, { quoted: m })
     } catch {
       return Promise.resolve()
     }
