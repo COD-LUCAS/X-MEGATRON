@@ -24,7 +24,7 @@ const writeBonds = (bonds) => {
 module.exports = {
   command: ['bond', 'unbond', 'listbond'],
   owner: true,
-  category: 'owner',
+  category: 'app',
 
   async execute(sock, m, context) {
     const { command, args, text, prefix } = context;
