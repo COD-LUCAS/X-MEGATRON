@@ -44,7 +44,7 @@ function updateEnv(key, value) {
 
 module.exports = {
   command: ['alive', 'setalive'],
-  category: 'utility',
+  category: 'misc',
   desc: 'Show bot alive status / set alive message',
   usage: '.alive | .setalive <text>;<image url>',
   group: false,
