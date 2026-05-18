@@ -1,102 +1,66 @@
+
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
+const fs       = require('fs');
+const path     = require('path');
+const axios    = require('axios');
 const FormData = require('form-data');
 
-const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
-if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+const TMP = path.join(__dirname, '..', 'database', 'tmp');
+if (!fs.existsSync(TMP)) fs.mkdirSync(TMP, { recursive: true });
 
-const CATBOX_UPLOAD = 'https://catbox.moe/user/api.php';
-
-const getTempPath = (filename) => path.join(TMP_DIR, `${Date.now()}_${filename}`);
-const cleanTemp = (file) => {
-  try { if (file && fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
+const react = async (sock, m, e) => {
+  try { await sock.sendMessage(m.chat, { react: { text: e, key: m.key } }); } catch (_) {}
 };
 
 module.exports = {
-  command: ['url'],
+  command: ['url', 'upload', 'tourl'],
   category: 'tools',
   desc: 'Upload media to Catbox and get URL',
   usage: '.url (reply to image/video/audio/document)',
 
   async execute(sock, m, context) {
-    const { reply, react, isOwner, isSudo } = context;
-    const mode = (process.env.MODE || 'public').toLowerCase();
-    const uid = m.sender.split('@')[0];
-    
-    // Permission check
-    if (mode === 'private') {
-      const ownerNum = (process.env.OWNER || '').split(',')[0];
-      if (uid !== ownerNum && !isSudo && !isOwner) {
-        return reply('_Owner only_');
-      }
-    }
+    const { reply } = context;
 
-    // Check reply
-    if (!m.quoted) {
+    if (!m.quoted) return reply('_Reply to an image, video, audio, or document_');
+
+    const mtype = m.quoted.mtype || '';
+    if (!mtype.includes('image') && !mtype.includes('video') && !mtype.includes('audio') && !mtype.includes('document')) {
       return reply('_Reply to an image, video, audio, or document_');
     }
 
-    const quotedMsg = m.quoted.message;
-    if (!quotedMsg) {
-      return reply('_Could not find quoted message_');
-    }
+    await react(sock, m, '⏳');
 
-    // Check for media
-    const isImage = quotedMsg.imageMessage;
-    const isVideo = quotedMsg.videoMessage;
-    const isAudio = quotedMsg.audioMessage;
-    const isDocument = quotedMsg.documentMessage;
-
-    if (!isImage && !isVideo && !isAudio && !isDocument) {
-      return reply('_Reply to an image, video, audio, or document_');
-    }
-
-    await react('⏳');
+    const ext      = mtype.includes('image') ? 'jpg' : mtype.includes('video') ? 'mp4' : mtype.includes('audio') ? 'mp3' : 'bin';
+    const tmpFile  = path.join(TMP, `${Date.now()}.${ext}`);
 
     try {
-      // Download media
-      const mediaBuffer = await m.quoted.download();
-      if (!mediaBuffer) {
-        await react('❌');
-        return reply('_Failed to download media_');
-      }
+      const buf = await m.quoted.download();
+      if (!buf?.length) { await react(sock, m, '❌'); return reply('_Download failed_'); }
 
-      // Save temp file
-      const ext = isImage ? 'jpg' : (isVideo ? 'mp4' : (isAudio ? 'mp3' : 'bin'));
-      const tempFile = getTempPath(`upload.${ext}`);
-      fs.writeFileSync(tempFile, mediaBuffer);
+      fs.writeFileSync(tmpFile, buf);
 
-      // Upload to Catbox
       const form = new FormData();
       form.append('reqtype', 'fileupload');
-      form.append('fileToUpload', fs.createReadStream(tempFile));
+      form.append('fileToUpload', fs.createReadStream(tmpFile));
 
-      const response = await axios.post(CATBOX_UPLOAD, form, {
-        headers: { ...form.getHeaders() },
-        timeout: 60000
+      const res = await axios.post('https://catbox.moe/user/api.php', form, {
+        headers: form.getHeaders(),
+        timeout: 60000,
       });
 
-      const url = response.data.trim();
+      try { fs.unlinkSync(tmpFile); } catch (_) {}
 
-      // Clean temp file immediately
-      cleanTemp(tempFile);
-      mediaBuffer = null;
+      const url = (res.data || '').trim();
+      if (!url.includes('catbox.moe')) { await react(sock, m, '❌'); return reply('_Upload failed_'); }
 
-      // Check if upload was successful
-      if (!url.includes('catbox.moe')) {
-        await react('❌');
-        return reply('_Upload failed_');
-      }
+      await react(sock, m, '✅');
+      return reply(url);
 
-      await react('✅');
-      await reply(`_Uploaded_\n\n${url}`);
-
-    } catch (err) {
-      await react('❌');
-      reply(`_Failed: ${err.message}_`);
+    } catch (e) {
+      try { fs.unlinkSync(tmpFile); } catch (_) {}
+      await react(sock, m, '❌');
+      return reply(`_Failed: ${e.message}_`);
     }
-  }
+  },
 };
