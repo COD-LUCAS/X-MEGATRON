@@ -1,3 +1,4 @@
+
 'use strict';
 
 module.exports = {
@@ -5,13 +6,10 @@ module.exports = {
   category: 'group',
   desc: 'Kick a member from the group',
   usage: '.kick (reply to user) | .kick @user',
-  admin: true,
   group: true,
 
   async execute(sock, m, context) {
-    const { reply, isOwner, isAdmin, isBotAdmin, participants } = context;
-
-    if (!isBotAdmin) return reply('_Make me admin first_');
+    const { reply, isOwner, participants } = context;
 
     // Collect targets
     let targets = [];
@@ -36,15 +34,18 @@ module.exports = {
       );
     }
 
-    // Filter out admins and owner
-    const botNum   = sock.user?.id?.split(':')[0];
+    // Filter out bot self
+    const botNum = sock.user?.id?.split(':')[0];
     const filtered = [];
 
     for (const jid of targets) {
       const num = jid.split('@')[0];
-      if (num === botNum) { reply('_I cannot kick myself_'); continue; }
+      if (num === botNum) {
+        reply('_I cannot kick myself_');
+        continue;
+      }
 
-      // Check if target is admin
+      // Check if target is admin (only owner can kick admins)
       const isTargetAdmin = participants.some(p =>
         p.id.split('@')[0] === num &&
         (p.admin === 'admin' || p.admin === 'superadmin')
@@ -70,6 +71,9 @@ module.exports = {
         mentions: filtered,
       });
     } catch (e) {
+      if (e.message.includes('403') || e.message.includes('not admin')) {
+        return reply('_Bot is not admin_');
+      }
       return reply(`_Failed: ${e.message}_`);
     }
   },
