@@ -70,7 +70,7 @@ function buildMenuCache(prefix) {
 
 module.exports = {
   command: ["menu", "help"],
-  category: "main",
+  category: "misc",
 
   async execute(sock, m, context) {
     try {
