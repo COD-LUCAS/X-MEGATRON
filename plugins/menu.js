@@ -132,8 +132,8 @@ module.exports = {
 
       let text = `*${botName}*\n`;
       text += `────────────────────\n\n`;
-      text += `*PREFIX*  : _${prefix}_\n`;
-      text += `*MODE*    : _${mode}_\n`;
+      text += ` ```PREFIX``` : _${prefix}_\n`;
+      text += ` ```MODE```    : _${mode}_\n`;
       text += `*OWNER*   : _${owner}_\n`;
       text += `*USER*    : _${userName}_\n`;
       text += `*SERVER*  : _${server}_\n`;
