@@ -4,9 +4,26 @@ const os = require("os");
 
 const PLUGIN_DIR = __dirname;
 const EXT_PLUGIN_DIR = path.join(__dirname, "..", "database", "external_plugins");
-const DEFAULT_MENU_IMAGE = path.join(__dirname, "..", "database", "img", "menu.jpg");
+const DB_DIR = path.join(__dirname, "..", "database");
+const SETTINGS_FILE = path.join(DB_DIR, "settings.json");
 
-let CACHED_MENU = null;
+// Default settings
+let settings = {
+  botName: "X MEGATRON",
+  menuImage: "https://files.catbox.moe/a6pqf1.jpg",
+  owner: "COD-LUCAS"
+};
+
+// Load settings
+try {
+  if (fs.existsSync(SETTINGS_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+    settings = { ...settings, ...saved };
+  } else {
+    if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  }
+} catch (e) {}
 
 function formatBytes(bytes) {
   const gb = (bytes / (1024 ** 3)).toFixed(2);
@@ -18,7 +35,7 @@ function formatUptime(seconds) {
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
-  
+
   if (d > 0) return `${d}d ${h}h ${m}m ${s}s`;
   if (h > 0) return `${h}h ${m}m ${s}s`;
   if (m > 0) return `${m}m ${s}s`;
@@ -27,46 +44,54 @@ function formatUptime(seconds) {
 
 function buildMenuCache(prefix) {
   const categories = {};
-
-  const pluginDirs = [PLUGIN_DIR];
-  if (fs.existsSync(EXT_PLUGIN_DIR)) {
-    pluginDirs.push(EXT_PLUGIN_DIR);
-  }
+  const pluginDirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
 
   for (const dir of pluginDirs) {
-    const files = fs.readdirSync(dir).filter(
-      f => f.endsWith(".js") && f !== "menu.js"
-    );
+    if (!fs.existsSync(dir)) continue;
+    
+    const files = fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js");
 
     for (const file of files) {
       try {
         delete require.cache[require.resolve(path.join(dir, file))];
         const plugin = require(path.join(dir, file));
 
-        if (!plugin?.command && !plugin?.onText) continue;
+        if (!plugin?.command) continue;
 
         const category = plugin.category || "basic";
-
         if (!categories[category]) categories[category] = [];
 
-        if (plugin.command) {
-          const cmds = Array.isArray(plugin.command)
-            ? plugin.command
-            : [plugin.command];
-
-          cmds.forEach(cmd => {
-            categories[category].push(`${prefix}${cmd}`);
-          });
-        } else if (plugin.onText) {
-          categories[category].push("auto-listener");
-        }
-
+        const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
+        cmds.forEach(cmd => {
+          categories[category].push(cmd);
+        });
       } catch (e) {}
     }
   }
 
   return categories;
 }
+
+const getTotalCommands = () => {
+  let count = 0;
+  const pluginDirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
+  
+  for (const dir of pluginDirs) {
+    if (!fs.existsSync(dir)) continue;
+    const files = fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js");
+    
+    for (const file of files) {
+      try {
+        const plugin = require(path.join(dir, file));
+        if (plugin?.command) {
+          const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
+          count += cmds.length;
+        }
+      } catch (e) {}
+    }
+  }
+  return count;
+};
 
 module.exports = {
   command: ["menu", "help"],
@@ -76,12 +101,25 @@ module.exports = {
     try {
       const prefix = context.prefix || ".";
       const mode = (process.env.MODE || "public").toUpperCase();
-      const ownerName = process.env.OWNER_NAME || process.env.OWNER || "COD-LUCAS";
-
-      // Use m.pushName directly (like the example code)
       const userName = m.pushName ? m.pushName.replace(/[\r\n]+/gm, "") : m.sender.split('@')[0];
-
-      CACHED_MENU = buildMenuCache(prefix);
+      
+      const botName = settings.botName;
+      const owner = settings.owner;
+      const totalPlugins = (() => {
+        let count = 0;
+        const dirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
+        for (const dir of dirs) {
+          if (fs.existsSync(dir)) {
+            count += fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js").length;
+          }
+        }
+        return count;
+      })();
+      
+      const totalCommands = getTotalCommands();
+      const uptime = formatUptime(process.uptime());
+      const server = os.platform().toUpperCase();
+      const freeMem = formatBytes(os.freemem());
 
       let version = "unknown";
       try {
@@ -92,50 +130,52 @@ module.exports = {
         }
       } catch {}
 
-      const uptime = formatUptime(process.uptime());
-      const server = os.platform().toUpperCase();
-      const freeMem = formatBytes(os.freemem());
-
-      let text = `*𝚾 𝚳𝚵𝐆𝚫𝚻𝚪𝚯𝚴*\n`;
+      let text = `*${botName}*\n`;
       text += `────────────────────\n\n`;
       text += `*PREFIX*  : _${prefix}_\n`;
       text += `*MODE*    : _${mode}_\n`;
-      text += `*OWNER*   : _${ownerName}_\n`;
+      text += `*OWNER*   : _${owner}_\n`;
       text += `*USER*    : _${userName}_\n`;
       text += `*SERVER*  : _${server}_\n`;
       text += `*RAM*     : _${freeMem}_\n`;
       text += `*VERSION* : _${version}_\n`;
-      text += `*UPTIME*  : _${uptime}_\n\n`;
+      text += `*UPTIME*  : _${uptime}_\n`;
+      text += `*PLUGINS* : _${totalPlugins}_\n`;
+      text += `*COMMANDS*: _${totalCommands}_\n\n`;
       text += `════════════════════\n\n`;
 
+      const CACHED_MENU = buildMenuCache(prefix);
       let counter = 1;
 
       for (const cat of Object.keys(CACHED_MENU)) {
         text += `*${cat}:*\n`;
-        
         for (const cmd of CACHED_MENU[cat]) {
-          text += `_${counter}. ${cmd}_\n`;
+          text += `_${counter}. ${prefix}${cmd}_\n`;
           counter++;
         }
-        
         text += `\n`;
       }
 
+      // Get image from settings (Catbox URL only)
+      const imageUrl = settings.menuImage;
       let imageBuffer;
-      if (fs.existsSync(DEFAULT_MENU_IMAGE)) {
-        imageBuffer = fs.readFileSync(DEFAULT_MENU_IMAGE);
+      
+      if (imageUrl && imageUrl.startsWith('http')) {
+        try {
+          const axios = require('axios');
+          const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 10000 });
+          imageBuffer = Buffer.from(response.data);
+        } catch (e) {
+          imageBuffer = { url: "https://files.catbox.moe/a6pqf1.jpg" };
+        }
       } else {
         imageBuffer = { url: "https://files.catbox.moe/a6pqf1.jpg" };
       }
 
-      await sock.sendMessage(
-        m.chat,
-        {
-          image: imageBuffer,
-          caption: text
-        },
-        { quoted: m }
-      );
+      await sock.sendMessage(m.chat, {
+        image: imageBuffer,
+        caption: text
+      }, { quoted: m });
 
     } catch (e) {
       console.error("Menu error:", e);
