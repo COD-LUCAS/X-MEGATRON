@@ -1,6 +1,6 @@
 'use strict';
 
-const { updateFullPP } = require('../library/pp');
+const { updateFullPP } = require('../library/misc');
 
 module.exports = {
   command: ['fullpp', 'setpp', 'profilepic'],
@@ -19,16 +19,12 @@ module.exports = {
       return reply('_Reply to an image_\n_Usage: .fullpp_');
     }
 
-    const quotedMsg = m.quoted.message;
-    if (!quotedMsg || !quotedMsg.imageMessage) {
-      return reply('_Reply to an image file_');
-    }
-
     await react('⏳');
 
     try {
       const mediaBuffer = await m.quoted.download();
-      if (!mediaBuffer) {
+      
+      if (!mediaBuffer || mediaBuffer.length === 0) {
         await react('❌');
         return reply('_Failed to download image_');
       }
