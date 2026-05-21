@@ -1,82 +1,65 @@
-const config = require("../config");
+'use strict';
 
 module.exports = {
-  command: ["del"],
-  category: "owner",
-  desc: "Delete replied message",
-  usage: ".del (reply to message)",
+  command: ['del', 'delete'],
+  category: 'owner',
+  desc: 'Delete replied message',
+  usage: '.del (reply to message)',
 
-  async execute(sock, m) {
+  async execute(sock, m, context) {
+    const { reply, isOwner } = context;
+    
+    // Only owner can use
+    if (!isOwner) {
+      return reply('_Owner only_');
+    }
+
+    if (!m.quoted) {
+      return reply('_Reply to a message to delete_');
+    }
+
     try {
-      const chatId = m.chat;
-
-      const sudoUsers = (config.SUDO || "")
-        .split(",")
-        .map(v => v.trim());
-
-      const sender =
-        m.sender ||
-        m.key.participant ||
-        m.key.remoteJid;
-
-      const isOwner = m.key.fromMe;
-
-      const isSudo = sudoUsers.includes(
-        sender.replace(/[^0-9]/g, "")
-      );
-
-      if (!isOwner && !isSudo) {
-        return await sock.sendMessage(chatId, {
-          text: "❌ Owner or sudo only"
-        }, { quoted: m });
+      // Get the quoted message key
+      const quotedKey = m.quoted.key;
+      
+      if (!quotedKey) {
+        return reply('_Could not find quoted message_');
       }
 
-      if (!m.quoted) {
-        return await sock.sendMessage(chatId, {
-          text: "⚠️ Reply to a message"
-        }, { quoted: m });
-      }
-
-      // ONLY CHECK ADMIN IF DELETING OTHERS MESSAGE
-      if (m.isGroup && !m.quoted.fromMe) {
-        const metadata = await sock.groupMetadata(chatId);
-
-        const botId =
-          sock.user.id.split(":")[0] + "@s.whatsapp.net";
-
-        const botData = metadata.participants.find(
-          p => p.id === botId
-        );
-
-        if (!botData?.admin) {
-          return await sock.sendMessage(chatId, {
-            text: "❌ Bot must be admin to delete others messages"
-          }, { quoted: m });
-        }
-      }
-
-      const key = {
-        remoteJid: chatId,
-        fromMe: m.quoted.fromMe,
-        id: m.quoted.id
+      // Build delete key
+      const deleteKey = {
+        remoteJid: m.chat,
+        id: quotedKey.id,
+        fromMe: quotedKey.fromMe || false
       };
 
+      // Add participant for groups
       if (m.isGroup) {
-        key.participant =
-          m.quoted.sender ||
-          m.quoted.participant;
+        deleteKey.participant = quotedKey.participant || m.quoted.sender;
       }
 
-      await sock.sendMessage(chatId, {
-        delete: key
-      });
+      // Send delete command
+      await sock.sendMessage(m.chat, { delete: deleteKey });
 
-    } catch (e) {
-      console.log("Delete Error:", e);
-
-      await sock.sendMessage(m.chat, {
-        text: "❌ Failed to delete message"
-      }, { quoted: m });
+    } catch (error) {
+      console.error('Delete error:', error);
+      
+      // Alternative method
+      try {
+        const altKey = {
+          remoteJid: m.chat,
+          id: m.quoted.id,
+          fromMe: false
+        };
+        
+        if (m.isGroup) {
+          altKey.participant = m.quoted.sender;
+        }
+        
+        await sock.sendMessage(m.chat, { delete: altKey });
+      } catch (err) {
+        reply(`_Failed: ${err.message}_`);
+      }
     }
   }
 };
