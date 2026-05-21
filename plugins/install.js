@@ -136,7 +136,7 @@ const reloadPlugins = () => {
 
 module.exports = {
   command: ['install', 'plugins', 'remove'],
-  category: 'owner',
+  category: 'app',
   desc: 'Install and manage plugins',
   usage: '.install <url> | .plugins | .remove <name_or_url>',
 
