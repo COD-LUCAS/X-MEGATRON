@@ -1,53 +1,82 @@
+const config = require("../config");
 
 module.exports = {
-  command: ['del'],
-  category: 'owner',
-  desc: 'Delete replied message',
-  usage: '.del (reply to message)',
+  command: ["del"],
+  category: "owner",
+  desc: "Delete replied message",
+  usage: ".del (reply to message)",
 
   async execute(sock, m) {
-    if (!m.quoted) return;
+    try {
+      const chatId = m.chat;
 
-    // Method 1: Try direct key from message
-    if (m.message?.extendedTextMessage?.contextInfo?.stanzaId) {
-      const ctx = m.message.extendedTextMessage.contextInfo;
+      const sudoUsers = (config.SUDO || "")
+        .split(",")
+        .map(v => v.trim());
+
+      const sender =
+        m.sender ||
+        m.key.participant ||
+        m.key.remoteJid;
+
+      const isOwner = m.key.fromMe;
+
+      const isSudo = sudoUsers.includes(
+        sender.replace(/[^0-9]/g, "")
+      );
+
+      if (!isOwner && !isSudo) {
+        return await sock.sendMessage(chatId, {
+          text: "❌ Owner or sudo only"
+        }, { quoted: m });
+      }
+
+      if (!m.quoted) {
+        return await sock.sendMessage(chatId, {
+          text: "⚠️ Reply to a message"
+        }, { quoted: m });
+      }
+
+      // ONLY CHECK ADMIN IF DELETING OTHERS MESSAGE
+      if (m.isGroup && !m.quoted.fromMe) {
+        const metadata = await sock.groupMetadata(chatId);
+
+        const botId =
+          sock.user.id.split(":")[0] + "@s.whatsapp.net";
+
+        const botData = metadata.participants.find(
+          p => p.id === botId
+        );
+
+        if (!botData?.admin) {
+          return await sock.sendMessage(chatId, {
+            text: "❌ Bot must be admin to delete others messages"
+          }, { quoted: m });
+        }
+      }
+
       const key = {
-        remoteJid: m.chat,
-        id: ctx.stanzaId,
-        participant: ctx.participant,
-        fromMe: false
+        remoteJid: chatId,
+        fromMe: m.quoted.fromMe,
+        id: m.quoted.id
       };
 
-      try {
-        await sock.sendMessage(m.chat, { delete: key });
-        return;
-      } catch (e) {}
-    }
+      if (m.isGroup) {
+        key.participant =
+          m.quoted.sender ||
+          m.quoted.participant;
+      }
 
-    // Method 2: Construct from quoted
-    const key2 = {
-      remoteJid: m.chat,
-      id: m.quoted.id,
-      participant: m.isGroup ? m.quoted.sender : undefined,
-      fromMe: m.quoted.fromMe
-    };
+      await sock.sendMessage(chatId, {
+        delete: key
+      });
 
-    try {
-      await sock.sendMessage(m.chat, { delete: key2 });
-      return;
-    } catch (e) {}
-
-    // Method 3: Try without participant
-    const key3 = {
-      remoteJid: m.chat,
-      id: m.quoted.id,
-      fromMe: m.quoted.fromMe
-    };
-
-    try {
-      await sock.sendMessage(m.chat, { delete: key3 });
     } catch (e) {
-      console.log('All delete methods failed');
+      console.log("Delete Error:", e);
+
+      await sock.sendMessage(m.chat, {
+        text: "❌ Failed to delete message"
+      }, { quoted: m });
     }
   }
 };
