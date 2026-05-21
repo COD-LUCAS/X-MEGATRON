@@ -30,7 +30,7 @@ const saveSettings = () => {
 
 module.exports = {
   command: ['setbotname', 'setowner'],
-  category: 'owner',
+  category: 'app',
   desc: 'Change bot settings',
   usage: '.setbotname <name> | .setowner <name>',
 
