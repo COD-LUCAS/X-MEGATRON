@@ -156,7 +156,7 @@ module.exports = {
   command: ['update', 'checkupdate', 'hardupdate'],
   owner: true,
   sudo: true,
-  category: 'owner',
+  category: 'app',
 
   async execute(sock, m, context) {
     const { command, args } = context;
