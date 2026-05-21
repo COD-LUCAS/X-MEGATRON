@@ -67,7 +67,7 @@ module.exports = {
 
       const names = filtered.map(j => `@${j.split('@')[0]}`).join(', ');
       await sock.sendMessage(m.chat, {
-        text: `_Kicked: ${names}_`,
+        text: `_Kicked_ : _${names}_`,
         mentions: filtered,
       });
     } catch (e) {
