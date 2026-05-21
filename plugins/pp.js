@@ -1,98 +1,39 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const { downloadContentFromMessage } = require('@itsliaaa/baileys');
-
-const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
-if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
-
-// Check if Jimp is installed
-let Jimp;
-try {
-  Jimp = require("jimp");
-} catch (e) {
-  // Jimp not installed
-}
-
-const cleanTemp = (file) => {
-  try { if (file && fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
-};
+const { updatefullpp } = require('../library/profile');
 
 module.exports = {
-  command: ['fullpp', 'setpp'],
-  category: 'owner',
-  desc: 'Update bot profile picture',
-  usage: '.fullpp (reply to image)',
+  command: ["fullpp"],
+  category: "sudo",
+  desc: "update profile in fullpp",
+  owner: true,
+  sudo: true,
 
   async execute(sock, m, context) {
-    const { reply, react, isOwner } = context;
+    const { reply, react, isOwner, isSudo } = context;
     
-    if (!isOwner) {
-      return reply('_Owner only_');
+    // Allow owner and sudo users
+    if (!isOwner && !isSudo) {
+      return reply("_Owner and sudo only_");
     }
-
-    if (!Jimp) {
-      return reply('_Jimp not found_\n_Install: npm install jimp_');
-    }
-
-    if (!m.quoted) {
-      return reply('_Reply to an image_\n_Usage: .fullpp_');
-    }
-
-    await react('⏳');
 
     try {
-      const quotedMsg = m.quoted.message;
+      if (!m.quoted || !m.quoted.message?.imageMessage) {
+        return reply("_Reply to an Image_");
+      }
+
+      await react('⏳');
       
-      if (!quotedMsg || !quotedMsg.imageMessage) {
-        await react('❌');
-        return reply('_Reply to an image file_');
-      }
-
-      // Download image
-      const stream = await downloadContentFromMessage(quotedMsg.imageMessage, 'image');
-      let buffer = Buffer.alloc(0);
-      for await (const chunk of stream) {
-        buffer = Buffer.concat([buffer, chunk]);
-      }
-
-      if (!buffer || buffer.length === 0) {
-        await react('❌');
-        return reply('_Failed to download image_');
-      }
-
-      // Process with Jimp
-      const image = await Jimp.read(buffer);
-      const size = Math.min(image.getWidth(), image.getHeight());
-      const cropped = image.crop(0, 0, size, size);
-      const resized = cropped.resize(640, 640);
-      const processedBuffer = await resized.getBufferAsync(Jimp.MIME_JPEG);
-
-      // Update using query method
-      await sock.query({
-        tag: "iq",
-        attrs: {
-          to: sock.user.id,
-          type: "set",
-          xmlns: "w:profile:picture"
-        },
-        content: [
-          {
-            tag: "picture",
-            attrs: { type: "image" },
-            content: processedBuffer
-          }
-        ]
-      });
-
+      let media = await m.quoted.download();
+      await updatefullpp(m.user || sock.user.id, media, sock);
+      
       await react('✅');
-      reply('_Profile picture updated_');
-
-    } catch (error) {
+      return reply("_Profile Picture Updated_");
+      
+    } catch (e) {
+      console.log(e);
       await react('❌');
-      console.error('FullPP error:', error);
-      reply(`_Failed: ${error.message}_`);
+      return reply(`_Failed: ${e.message}_`);
     }
   }
 };
