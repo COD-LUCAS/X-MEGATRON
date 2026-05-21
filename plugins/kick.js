@@ -1,80 +1,86 @@
-
 'use strict';
 
 module.exports = {
   command: ['kick'],
   category: 'group',
-  desc: 'Kick a member from the group',
-  usage: '.kick (reply to user) | .kick @user',
+  desc: 'Kick members from group',
+  usage: '.kick @user | .kick all | .kick 91',
   group: true,
 
   async execute(sock, m, context) {
-    const { reply, isOwner, participants } = context;
+    const { reply, args, isOwner, isAdmin, isBotAdmin, participants } = context;
+    
+    if (!isBotAdmin) return reply('_Make me admin first_');
+    if (!isOwner && !isAdmin) return reply('_Admin or owner only_');
 
-    // Collect targets
-    let targets = [];
+    const input = args.join(' ').toLowerCase();
+    const match = input;
 
-    // From reply
-    if (m.quoted?.sender) {
-      targets.push(m.quoted.sender);
+    // Kick all members
+    if (match === 'all') {
+      const users = participants.filter(member => !member.admin);
+      if (users.length === 0) return reply('_No non-admin members to kick_');
+      
+      await reply(`_❗ Kicking ${users.length} members from ${m.chat.split('@')[0]}. This will take a moment..._`);
+      
+      for (const member of users) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          await sock.groupParticipantsUpdate(m.chat, [member.id], 'remove');
+        } catch (e) {}
+      }
+      
+      return reply(`_Kicked ${users.length} members_`);
     }
 
+    // Kick by number prefix
+    if (/^\d+$/.test(match)) {
+      const users = participants.filter(member => 
+        member.id.startsWith(match) && !member.admin
+      );
+      
+      if (users.length === 0) return reply(`_No members starting with ${match}_`);
+      
+      await reply(`_❗ Kicking ${users.length} members with prefix ${match}_`);
+      
+      for (const member of users) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          await sock.groupParticipantsUpdate(m.chat, [member.id], 'remove');
+        } catch (e) {}
+      }
+      
+      return reply(`_Kicked ${users.length} members_`);
+    }
+
+    // Kick mentioned or replied user
+    let user = null;
+    
     // From mentions
     if (m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length) {
-      targets.push(...m.message.extendedTextMessage.contextInfo.mentionedJid);
+      user = m.message.extendedTextMessage.contextInfo.mentionedJid[0];
+    }
+    // From reply
+    else if (m.quoted?.sender) {
+      user = m.quoted.sender;
+    }
+    
+    if (!user) return reply('_Mention or reply to a user_\n_Usage: .kick @user_');
+
+    const isTargetAdmin = participants.some(p => 
+      p.id === user && (p.admin === 'admin' || p.admin === 'superadmin')
+    );
+    
+    if (isTargetAdmin && !isOwner) {
+      return reply('_Cannot kick an admin_');
     }
 
-    // Deduplicate
-    targets = [...new Set(targets)];
-
-    if (!targets.length) {
-      return reply(
-        `_Reply to a message or mention a user_\n` +
-        `_Example: ${context.prefix}kick @user_`
-      );
-    }
-
-    // Filter out bot self
-    const botNum = sock.user?.id?.split(':')[0];
-    const filtered = [];
-
-    for (const jid of targets) {
-      const num = jid.split('@')[0];
-      if (num === botNum) {
-        reply('_I cannot kick myself_');
-        continue;
-      }
-
-      // Check if target is admin (only owner can kick admins)
-      const isTargetAdmin = participants.some(p =>
-        p.id.split('@')[0] === num &&
-        (p.admin === 'admin' || p.admin === 'superadmin')
-      );
-
-      if (isTargetAdmin && !isOwner) {
-        reply(`_Cannot kick admin @${num}_`);
-        continue;
-      }
-
-      filtered.push(jid);
-    }
-
-    if (!filtered.length) return;
-
-    try {
-      await sock.groupParticipantsUpdate(m.chat, filtered, 'remove');
-      await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
-
-      const names = filtered.map(j => `@${j.split('@')[0]}`).join(', ');
-      await sock.sendMessage(m.chat, {
-        text: `_Kicked_ : _${names}_`,
-        mentions: filtered,
-      });
-    } catch (e) {
-      if (e.message.includes('403') || e.message.includes('not admin')) {
-        return reply('_Bot is not admin_');
-      }
-      return reply(`_Failed: ${e.message}_`);
-    }
-  },
+    const userNum = user.split('@')[0];
+    await sock.sendMessage(m.chat, {
+      text: `_Kicked @${userNum}_`,
+      mentions: [user]
+    });
+    
+    await sock.groupParticipantsUpdate(m.chat, [user], 'remove');
+  }
 };
