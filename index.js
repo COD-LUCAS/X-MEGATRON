@@ -76,7 +76,7 @@ const initSession = async (sessionDir) => {
 
   const credsFile = path.join(sessionDir, 'creds.json');
   if (!fs.existsSync(credsFile)) {
-    if (!envId.includes('~')) { log.error('SESSION_ID must be: xmegatron~pastebin_id'); process.exit(1); }
+    if (!envId.includes('~')) { log.error('SESSION_ID must be: xmegatron~id'); process.exit(1); }
     const pbId = envId.split('~').pop().trim();
     log.info('Downloading session...');
     try {
@@ -187,31 +187,27 @@ const start = async () => {
   // ── Group participant events (welcome, goodbye, promote, demote) ────
   sock.ev.on('group-participants.update', async ({ id, participants, action, author }) => {
     try {
-      const db = loadGroupEventsDB();
+      const db      = loadGroupEventsDB();
       const groupDb = db[id] || {};
 
-      // ── Welcome & Goodbye ──
+      // Fetch group name once for all actions
+      let groupName = id;
+      try {
+        const meta = await sock.groupMetadata(id);
+        groupName  = meta.subject || id;
+      } catch (_) {}
+
+      // ── Welcome ──
       if (action === 'add' && groupDb.welcome?.enabled) {
-        let groupName = id;
-        let groupDesc = '';
-        try {
-          const meta = await sock.groupMetadata(id);
-          groupName  = meta.subject || id;
-          groupDesc  = meta.desc   || '';
-        } catch (_) {}
+        const template = groupDb.welcome.message || '{user} joined {group}';
 
         for (const jid of participants) {
           const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
           const user   = jidStr.split('@')[0];
-          const now    = new Date().toLocaleString('en-US', { hour12: true });
 
-          let finalMsg = groupDb.welcome.message ||
-            `╭─────────────────╮\n│  ✨ NEW MEMBER ✨  │\n╰─────────────────╯\n\nWelcome @${user} 👋\nto *${groupName}*!\n\n🕐 ${now}`;
-
-          finalMsg = finalMsg
+          const finalMsg = '_' + template
             .replace(/{user}/g, `@${user}`)
-            .replace(/{group}/g, groupName)
-            .replace(/{description}/g, groupDesc);
+            .replace(/{group}/g, groupName) + '_';
 
           await sock.sendMessage(id, {
             text: finalMsg,
@@ -220,23 +216,17 @@ const start = async () => {
         }
       }
 
+      // ── Goodbye ──
       if ((action === 'remove' || action === 'leave') && groupDb.goodbye?.enabled) {
-        let groupName = id;
-        try {
-          const meta = await sock.groupMetadata(id);
-          groupName  = meta.subject || id;
-        } catch (_) {}
+        const template = groupDb.goodbye.message || '{user} left {group}';
 
         for (const jid of participants) {
           const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
           const user   = jidStr.split('@')[0];
 
-          let finalMsg = groupDb.goodbye.message ||
-            `👋 *@${user}* has left *${groupName}*.\nGoodbye! We'll miss you.`;
-
-          finalMsg = finalMsg
+          const finalMsg = '_' + template
             .replace(/{user}/g, `@${user}`)
-            .replace(/{group}/g, groupName);
+            .replace(/{group}/g, groupName) + '_';
 
           await sock.sendMessage(id, {
             text: finalMsg,
@@ -247,46 +237,32 @@ const start = async () => {
 
       // ── Promote event ──
       if (action === 'promote') {
-        const promotedUsers = participants.map(jid => {
-          const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
-          return `• @${jidStr.split('@')[0]}`;
-        }).join('\n');
-
         const mentionList = participants.map(jid =>
           typeof jid === 'string' ? jid : (jid.id || String(jid))
         );
-
-        const promotedBy = author ? `@${author.split('@')[0]}` : 'System';
+        const names = mentionList.map(jid => `@${jid.split('@')[0]}`).join(', ');
+        const by    = author ? `@${author.split('@')[0]}` : 'system';
         if (author) mentionList.push(author);
 
-        const msg = `*『 GROUP PROMOTION 』*\n\n` +
-          `👥 *Promoted:*\n${promotedUsers}\n\n` +
-          `👑 *By:* ${promotedBy}\n` +
-          `📅 *Date:* ${new Date().toLocaleString()}`;
-
-        await sock.sendMessage(id, { text: msg, mentions: mentionList }).catch(() => {});
+        await sock.sendMessage(id, {
+          text: `_${names} was promoted to admin by ${by}_`,
+          mentions: mentionList
+        }).catch(() => {});
       }
 
       // ── Demote event ──
       if (action === 'demote') {
-        const demotedUsers = participants.map(jid => {
-          const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
-          return `• @${jidStr.split('@')[0]}`;
-        }).join('\n');
-
         const mentionList = participants.map(jid =>
           typeof jid === 'string' ? jid : (jid.id || String(jid))
         );
-
-        const demotedBy = author ? `@${author.split('@')[0]}` : 'System';
+        const names = mentionList.map(jid => `@${jid.split('@')[0]}`).join(', ');
+        const by    = author ? `@${author.split('@')[0]}` : 'system';
         if (author) mentionList.push(author);
 
-        const msg = `*『 GROUP DEMOTION 』*\n\n` +
-          `👤 *Demoted:*\n${demotedUsers}\n\n` +
-          `👑 *By:* ${demotedBy}\n` +
-          `📅 *Date:* ${new Date().toLocaleString()}`;
-
-        await sock.sendMessage(id, { text: msg, mentions: mentionList }).catch(() => {});
+        await sock.sendMessage(id, {
+          text: `_${names} was demoted from admin by ${by}_`,
+          mentions: mentionList
+        }).catch(() => {});
       }
 
     } catch (e) {
