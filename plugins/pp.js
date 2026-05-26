@@ -15,17 +15,18 @@ const cleanTemp = (file) => {
 };
 
 module.exports = {
-  command: ['setbotpp', 'setppbot', 'pp'],
+  command: ['setbotpp', 'setppbot', 'setpp', 'pp', 'fullpp'],
   category: 'owner',
   desc: 'Set bot profile picture from image or sticker',
   usage: '.setbotpp (reply to image or sticker)',
   owner: true,
 
   async execute(sock, m, context) {
-    const { reply, react, isOwner } = context;
+    const { reply, command, isOwner } = context;
     
     if (!isOwner) return reply('_Owner only_');
     
+    // Check if message is a reply
     if (!m.quoted) {
       return reply('_Reply to an image or sticker_\n_Usage: .setbotpp_');
     }
@@ -35,41 +36,44 @@ module.exports = {
       return reply('_Could not find quoted message_');
     }
     
-    const imageMsg = quotedMsg.imageMessage;
-    const stickerMsg = quotedMsg.stickerMessage;
+    // Check for image or sticker
+    const imageMessage = quotedMsg.imageMessage;
+    const stickerMessage = quotedMsg.stickerMessage;
     
-    if (!imageMsg && !stickerMsg) {
+    if (!imageMessage && !stickerMessage) {
       return reply('_Reply to an image or sticker_');
     }
     
-    const mediaMsg = imageMsg || stickerMsg;
-    
-    await react('⏳');
+    const mediaMessage = imageMessage || stickerMessage;
+    const imagePath = getTempPath('profile.jpg');
     
     try {
       // Download media
-      const stream = await downloadContentFromMessage(mediaMsg, 'image');
+      const stream = await downloadContentFromMessage(mediaMessage, 'image');
       let buffer = Buffer.alloc(0);
       for await (const chunk of stream) {
         buffer = Buffer.concat([buffer, chunk]);
       }
       
-      // Check size
+      // Check file size
       if (buffer.length > MAX_FILE_SIZE) {
-        await react('❌');
-        return reply(`_File too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB (max: ${MAX_FILE_SIZE / 1024 / 1024}MB)_`);
+        cleanTemp(imagePath);
+        return reply(`_File too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB (max: 10MB)_`);
       }
       
-      // Update profile picture
+      // Save the image
+      fs.writeFileSync(imagePath, buffer);
+      
+      // Set profile picture
       await sock.updateProfilePicture(sock.user.id, buffer);
       
-      await react('✅');
-      return reply('_Profile picture updated_');
+      await reply('_Profile picture updated_');
       
     } catch (error) {
-      await react('❌');
-      console.error('Setbotpp error:', error);
-      return reply('_Failed to update profile picture_');
+      console.error('setbotpp error:', error);
+      reply('_Failed to update profile picture_');
+    } finally {
+      cleanTemp(imagePath);
     }
   }
 };
