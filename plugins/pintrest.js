@@ -3,7 +3,6 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { downloadContentFromMessage } = require('@itsliaaa/baileys');
 
 const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -39,16 +38,20 @@ module.exports = {
       return reply('_That doesn\'t look like a valid Pinterest URL._');
     }
     
+    // Send loading reaction
+    await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } }).catch(() => {});
+    
     let data;
     try {
       const response = await axios.get(PINTEREST_API, { params: { url }, timeout: 20000 });
       data = response.data;
     } catch (error) {
-      console.error('Pinterest API error:', error);
+      await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } }).catch(() => {});
       return reply('_Failed to reach the Pinterest API. Please try again later._');
     }
     
     if (!data?.status) {
+      await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } }).catch(() => {});
       return reply('_Could not fetch that Pinterest post. Make sure the link is valid and public._');
     }
     
@@ -56,10 +59,9 @@ module.exports = {
     const cleanImages = getCleanImages(data.images);
     
     if (!hasVideo && cleanImages.length === 0) {
+      await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } }).catch(() => {});
       return reply('_No downloadable media found in that post._');
     }
-    
-    const caption = data.resolvedUrl ? `_Pinterest Download_` : '_Pinterest_';
     
     try {
       if (hasVideo) {
@@ -70,8 +72,7 @@ module.exports = {
         fs.writeFileSync(videoPath, videoRes.data);
         
         await sock.sendMessage(m.chat, {
-          video: fs.readFileSync(videoPath),
-          caption: caption
+          video: fs.readFileSync(videoPath)
         }, { quoted: m });
         
         cleanTemp(videoPath);
@@ -84,15 +85,17 @@ module.exports = {
         fs.writeFileSync(imagePath, imageRes.data);
         
         await sock.sendMessage(m.chat, {
-          image: fs.readFileSync(imagePath),
-          caption: caption
+          image: fs.readFileSync(imagePath)
         }, { quoted: m });
         
         cleanTemp(imagePath);
       }
       
+      // Send success reaction
+      await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } }).catch(() => {});
+      
     } catch (error) {
-      console.error('Pinterest send error:', error);
+      await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } }).catch(() => {});
       return reply('_Downloaded but failed to send the media. Try again._');
     }
   }
