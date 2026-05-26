@@ -252,7 +252,7 @@ const start = async () => {
           if (author) mentionList.push(author);
 
           await sock.sendMessage(id, {
-            text: `_${names} was promoted to admin by ${by}_`,
+            text: `${names} _was promoted to admin by_ ${by}`,
             mentions: mentionList
           }).catch(() => {});
         }
@@ -275,7 +275,7 @@ const start = async () => {
           if (author) mentionList.push(author);
 
           await sock.sendMessage(id, {
-            text: `_${names} was demoted from admin by ${by}_`,
+            text: `${names} _was demoted from admin by_ ${by}`,
             mentions: mentionList
           }).catch(() => {});
         }
