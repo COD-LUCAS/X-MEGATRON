@@ -1,21 +1,18 @@
-
 /**
- * groupevents.js
+ * groupevents.js — plugins/groupevents.js
  * Commands: .welcome, .goodbye
- * Auto-fires on group join/leave via index.js group-participants.update event
  */
 
 'use strict';
 
-const fs   = require('fs');
-const path = require('path');
+const fs      = require('fs');
+const path    = require('path');
+const isAdmin = require('../library/isAdmin');
 
 const DB_FILE = path.join(__dirname, '..', 'database', 'group_events.json');
 
 const loadDB = () => {
-  try {
-    if (fs.existsSync(DB_FILE)) return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-  } catch (_) {}
+  try { if (fs.existsSync(DB_FILE)) return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); } catch (_) {}
   return {};
 };
 
@@ -23,60 +20,40 @@ const saveDB = (data) => {
   try { fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2)); } catch (_) {}
 };
 
-const getGroup = (db, chatId) => {
-  if (!db[chatId]) db[chatId] = {};
-  return db[chatId];
-};
-
 module.exports = {
   command: ['welcome', 'goodbye'],
   category: 'group',
   group: true,
   desc: 'Set welcome and goodbye messages for this group',
-  usage: '.welcome on/off/set <message>\n.goodbye on/off/set <message>',
+  usage: '.welcome on/off/set <message> | .goodbye on/off/set <message>',
 
   async execute(sock, m, ctx) {
-    const { command, args, reply, isAdmin, isOwner, prefix } = ctx;
+    const { command, args, reply, isOwner, prefix } = ctx;
 
-    // Live admin check
-    let senderIsAdmin = false;
-    try {
-      const meta   = await sock.groupMetadata(m.chat);
-      const sndNum = (m.sender || '').split('@')[0];
-      senderIsAdmin = meta.participants.some(p => p.id.split('@')[0] === sndNum && p.admin);
-    } catch (_) {}
-
-    if (!senderIsAdmin && !isOwner) return reply('_This command is for group admins only_');
+    // ── Live admin check via isAdmin.js ──────────────────────────
+    const { isSenderAdmin } = await isAdmin(sock, m.chat, m.sender);
+    if (!isSenderAdmin && !isOwner) return reply('_this command is for group admins only_');
 
     const db    = loadDB();
-    const group = getGroup(db, m.chat);
+    if (!db[m.chat]) db[m.chat] = {};
+    const group = db[m.chat];
     const type  = command; // 'welcome' or 'goodbye'
     const sub   = args[0]?.toLowerCase();
 
-    const DEFAULT_WELCOME = '{user} joined {group}';
-    const DEFAULT_GOODBYE = '{user} left {group}';
+    const DEFAULT_WELCOME = '{user} _joined_ {group}';
+    const DEFAULT_GOODBYE = '{user} _left_ {group}';
 
-    const HELP_WELCOME =
-      `_Welcome command usage_\n\n` +
-      `_${prefix}welcome on - enable_\n` +
-      `_${prefix}welcome off - disable_\n` +
-      `_${prefix}welcome set <message> - custom message_\n` +
-      `_${prefix}welcome reset - restore default_\n` +
-      `_${prefix}welcome status - show current setting_\n\n` +
-      `_Variables: {user} {group}_\n\n` +
-      `_Default: ${DEFAULT_WELCOME}_`;
+    const HELP =
+      `_${type} command_\n\n` +
+      `_${prefix}${type} on_\n` +
+      `_${prefix}${type} off_\n` +
+      `_${prefix}${type} set <message>_\n` +
+      `_${prefix}${type} reset_\n` +
+      `_${prefix}${type} status_\n\n` +
+      `_variables: {user} {group}_\n\n` +
+      `_default: ${type === 'welcome' ? DEFAULT_WELCOME : DEFAULT_GOODBYE}_`;
 
-    const HELP_GOODBYE =
-      `_Goodbye command usage_\n\n` +
-      `_${prefix}goodbye on - enable_\n` +
-      `_${prefix}goodbye off - disable_\n` +
-      `_${prefix}goodbye set <message> - custom message_\n` +
-      `_${prefix}goodbye reset - restore default_\n` +
-      `_${prefix}goodbye status - show current setting_\n\n` +
-      `_Variables: {user} {group}_\n\n` +
-      `_Default: ${DEFAULT_GOODBYE}_`;
-
-    if (!sub) return reply(type === 'welcome' ? HELP_WELCOME : HELP_GOODBYE);
+    if (!sub) return reply(HELP);
 
     if (!group[type]) group[type] = {
       enabled: false,
@@ -97,7 +74,7 @@ module.exports = {
 
     if (sub === 'set') {
       const custom = args.slice(1).join(' ').trim();
-      if (!custom) return reply(`_Usage: ${prefix}${type} set <your message>_\n_Variables: {user} {group}_`);
+      if (!custom) return reply(`_usage: ${prefix}${type} set <message>_\n_variables: {user} {group}_`);
       group[type].message = custom;
       group[type].enabled = true;
       saveDB(db);
@@ -107,17 +84,17 @@ module.exports = {
     if (sub === 'reset') {
       group[type].message = type === 'welcome' ? DEFAULT_WELCOME : DEFAULT_GOODBYE;
       saveDB(db);
-      return reply(`_${type} message reset to default_\n\n_${group[type].message}_`);
+      return reply(`$_{type} message reset to default_`);
     }
 
     if (sub === 'status') {
       const state = group[type] || { enabled: false, message: type === 'welcome' ? DEFAULT_WELCOME : DEFAULT_GOODBYE };
       return reply(
-        `_${type} status: ${state.enabled ? 'on' : 'off'}_\n` +
+        `_${type}: ${state.enabled ? 'on' : 'off'}_\n` +
         `_message: ${state.message}_`
       );
     }
 
-    return reply(type === 'welcome' ? HELP_WELCOME : HELP_GOODBYE);
+    return reply(HELP);
   }
 };
