@@ -3,7 +3,7 @@
 const axios = require('axios');
 
 module.exports = {
-  command: ['true'],
+  command: ['carrier'],
   category: 'tools',
   desc: 'Look up carrier and details for a phone number',
   usage: '.true +918111857757',
