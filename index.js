@@ -76,7 +76,7 @@ const initSession = async (sessionDir) => {
 
   const credsFile = path.join(sessionDir, 'creds.json');
   if (!fs.existsSync(credsFile)) {
-    if (!envId.includes('~')) { log.error('SESSION_ID must be: xmegatron~id'); process.exit(1); }
+    if (!envId.includes('~')) { log.error('SESSION_ID must be: xmegatron~pastebin_id'); process.exit(1); }
     const pbId = envId.split('~').pop().trim();
     log.info('Downloading session...');
     try {
@@ -235,34 +235,50 @@ const start = async () => {
         }
       }
 
-      // ── Promote event ──
+      // ── Promote event (only if pdm is on for this group) ──
       if (action === 'promote') {
-        const mentionList = participants.map(jid =>
-          typeof jid === 'string' ? jid : (jid.id || String(jid))
-        );
-        const names = mentionList.map(jid => `@${jid.split('@')[0]}`).join(', ');
-        const by    = author ? `@${author.split('@')[0]}` : 'system';
-        if (author) mentionList.push(author);
+        let gsDb = {};
+        try {
+          const gsFile = require('path').join(__dirname, 'database', 'group_settings.json');
+          if (require('fs').existsSync(gsFile)) gsDb = JSON.parse(require('fs').readFileSync(gsFile, 'utf8'));
+        } catch (_) {}
 
-        await sock.sendMessage(id, {
-          text: `_${names} was promoted to admin by ${by}_`,
-          mentions: mentionList
-        }).catch(() => {});
+        if (gsDb[id]?.pdm) {
+          const mentionList = participants.map(jid =>
+            typeof jid === 'string' ? jid : (jid.id || String(jid))
+          );
+          const names = mentionList.map(jid => `@${jid.split('@')[0]}`).join(', ');
+          const by    = author ? `@${author.split('@')[0]}` : 'system';
+          if (author) mentionList.push(author);
+
+          await sock.sendMessage(id, {
+            text: `_${names} was promoted to admin by ${by}_`,
+            mentions: mentionList
+          }).catch(() => {});
+        }
       }
 
-      // ── Demote event ──
+      // ── Demote event (only if pdm is on for this group) ──
       if (action === 'demote') {
-        const mentionList = participants.map(jid =>
-          typeof jid === 'string' ? jid : (jid.id || String(jid))
-        );
-        const names = mentionList.map(jid => `@${jid.split('@')[0]}`).join(', ');
-        const by    = author ? `@${author.split('@')[0]}` : 'system';
-        if (author) mentionList.push(author);
+        let gsDb = {};
+        try {
+          const gsFile = require('path').join(__dirname, 'database', 'group_settings.json');
+          if (require('fs').existsSync(gsFile)) gsDb = JSON.parse(require('fs').readFileSync(gsFile, 'utf8'));
+        } catch (_) {}
 
-        await sock.sendMessage(id, {
-          text: `_${names} was demoted from admin by ${by}_`,
-          mentions: mentionList
-        }).catch(() => {});
+        if (gsDb[id]?.pdm) {
+          const mentionList = participants.map(jid =>
+            typeof jid === 'string' ? jid : (jid.id || String(jid))
+          );
+          const names = mentionList.map(jid => `@${jid.split('@')[0]}`).join(', ');
+          const by    = author ? `@${author.split('@')[0]}` : 'system';
+          if (author) mentionList.push(author);
+
+          await sock.sendMessage(id, {
+            text: `_${names} was demoted from admin by ${by}_`,
+            mentions: mentionList
+          }).catch(() => {});
+        }
       }
 
     } catch (e) {
