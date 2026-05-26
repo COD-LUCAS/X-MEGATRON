@@ -6,7 +6,7 @@ module.exports = {
   command: ['carrier'],
   category: 'tools',
   desc: 'Look up carrier and details for a phone number',
-  usage: '.true +918111857757',
+  usage: '.carrier +919876543210',
 
   async execute(sock, m, context) {
     const { reply, args } = context;
@@ -14,7 +14,7 @@ module.exports = {
     let number = args.join('');
     
     if (!number) {
-      return reply('_Please provide a phone number._\n\n_Usage: .true +918111857757_');
+      return reply('_Please provide a phone number._\n\n_Usage: .carrier +919876543210_');
     }
     
     // Remove spaces
