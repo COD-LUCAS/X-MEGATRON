@@ -1,4 +1,4 @@
-'use strict';
+ew'use strict';
 
 const axios = require('axios');
 const fs = require('fs');
