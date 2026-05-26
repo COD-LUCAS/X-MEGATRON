@@ -1,63 +1,99 @@
 'use strict';
 
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+
+const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
+if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+
+const PINTEREST_API = 'https://xeon-pin-api.onrender.com/pin';
+
+const getTempPath = (filename) => path.join(TMP_DIR, `${Date.now()}_${filename}`);
+const cleanTemp = (file) => {
+  try { if (file && fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
+};
+
+const getCleanImages = (images) => {
+  if (!Array.isArray(images)) return [];
+  return images.filter(url => /^https?:\/\/[^\s"')]+\.(jpg|jpeg|png|webp)/i.test(url));
+};
 
 module.exports = {
   command: ['pin', 'pinterest'],
   category: 'downloader',
-  desc: 'Download Pinterest images/videos',
+  desc: 'Download Pinterest image or video from a URL',
   usage: '.pin <pinterest_url>',
 
   async execute(sock, m, context) {
     const { reply, args } = context;
     
-    let url = args.join('');
+    const url = args.join(' ').trim();
     
     if (!url) {
-      return reply('_Please provide a Pinterest URL_\n\n_Example: .pin https://pin.it/1T5P5nBvl_');
+      return reply('_Please provide a Pinterest URL._\n\n_Usage: .pin <pinterest_url>_');
     }
     
+    if (!/pinterest\.com|pin\.it/i.test(url)) {
+      return reply('_That doesn\'t look like a valid Pinterest URL._');
+    }
+    
+    let data;
     try {
-      const apiUrl = `https://xeon-pin-api.onrender.com/pin?url=${encodeURIComponent(url)}`;
-      const response = await axios.get(apiUrl, { timeout: 30000 });
-      const data = response.data;
-      
-      if (!data || data.status !== true) {
-        return reply('_Failed to fetch Pinterest content_\n_Make sure the URL is valid_');
-      }
-      
-      const images = data.images || [];
-      const videos = data.videos || [];
-      
-      if (images.length === 0 && videos.length === 0) {
-        return reply('_No media found in this pin_');
-      }
-      
-      // Send images
-      for (const img of images) {
-        if (img && img.startsWith('http')) {
-          await sock.sendMessage(m.chat, { image: { url: img }, caption: '_Pinterest Download_' }, { quoted: m });
-        }
-      }
-      
-      // Send videos
-      for (const video of videos) {
-        if (video && video.startsWith('http')) {
-          await sock.sendMessage(m.chat, { video: { url: video }, caption: '_Pinterest Download_' }, { quoted: m });
-        }
-      }
-      
-      if (images.length === 0 && videos.length > 0) {
-        // Already sent videos above
-      } else if (images.length === 1 && videos.length === 0) {
-        await reply('_Image sent above_');
-      } else if (images.length > 1) {
-        await reply(`_Sent ${images.length} images_`);
+      const response = await axios.get(PINTEREST_API, { params: { url }, timeout: 20000 });
+      data = response.data;
+    } catch (error) {
+      console.error('Pinterest API error:', error);
+      return reply('_Failed to reach the Pinterest API. Please try again later._');
+    }
+    
+    if (!data?.status) {
+      return reply('_Could not fetch that Pinterest post. Make sure the link is valid and public._');
+    }
+    
+    const hasVideo = Array.isArray(data.videos) && data.videos.length > 0;
+    const cleanImages = getCleanImages(data.images);
+    
+    if (!hasVideo && cleanImages.length === 0) {
+      return reply('_No downloadable media found in that post._');
+    }
+    
+    const caption = data.resolvedUrl ? `_Pinterest Download_` : '_Pinterest_';
+    
+    try {
+      if (hasVideo) {
+        const videoUrl = data.videos[0];
+        const videoPath = getTempPath('pin_video.mp4');
+        
+        const videoRes = await axios.get(videoUrl, { responseType: 'arraybuffer', timeout: 30000 });
+        fs.writeFileSync(videoPath, videoRes.data);
+        
+        await sock.sendMessage(m.chat, {
+          video: fs.readFileSync(videoPath),
+          caption: caption
+        }, { quoted: m });
+        
+        cleanTemp(videoPath);
+      } else {
+        const imageUrl = cleanImages[cleanImages.length - 1];
+        const ext = path.extname(imageUrl.split('?')[0]) || '.jpg';
+        const imagePath = getTempPath(`pin_image${ext}`);
+        
+        const imageRes = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 20000 });
+        fs.writeFileSync(imagePath, imageRes.data);
+        
+        await sock.sendMessage(m.chat, {
+          image: fs.readFileSync(imagePath),
+          caption: caption
+        }, { quoted: m });
+        
+        cleanTemp(imagePath);
       }
       
     } catch (error) {
-      console.error('Pinterest error:', error);
-      return reply('_Failed to fetch Pinterest content_\n_Please try again later_');
+      console.error('Pinterest send error:', error);
+      return reply('_Downloaded but failed to send the media. Try again._');
     }
   }
 };
