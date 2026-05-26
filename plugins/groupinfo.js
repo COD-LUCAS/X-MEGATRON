@@ -12,51 +12,77 @@ module.exports = {
   desc: 'Group management commands',
 
   async execute(sock, m, ctx) {
-    const { command, args, text, reply, isAdmin, isOwner, isBotAdmin, prefix } = ctx;
+    const { command, args, text, reply, isAdmin, isOwner, prefix } = ctx;
 
-    // ── GROUPINFO ──────────────────────────────────────────────────
+    // Always fetch live admin status — never trust cached ctx.isBotAdmin
+    let botIsAdmin    = false;
+    let senderIsAdmin = false;
+    try {
+      const meta   = await sock.groupMetadata(m.chat);
+      const botNum = sock.user?.id?.split(':')[0] || '';
+      const sndNum = (m.sender || '').split('@')[0];
+      botIsAdmin    = meta.participants.some(p => p.id.split('@')[0] === botNum    && p.admin);
+      senderIsAdmin = meta.participants.some(p => p.id.split('@')[0] === sndNum    && p.admin);
+    } catch (_) {}
+
+    // ── GROUPINFO (anyone in the group can run this) ──────────────
     if (command === 'groupinfo') {
       try {
-        const meta = await sock.groupMetadata(m.chat);
-        const admins = meta.participants.filter(p => p.admin).map(p => `• @${p.id.split('@')[0]}`).join('\n');
+        const meta   = await sock.groupMetadata(m.chat);
+        const admins = meta.participants
+          .filter(p => p.admin)
+          .map(p => `_• @${p.id.split('@')[0]}_`)
+          .join('\n');
+
+        const created = new Date(meta.creation * 1000).toLocaleString('en-US', {
+          year: 'numeric', month: 'long', day: 'numeric',
+          hour: '2-digit', minute: '2-digit'
+        });
+
         const msg =
-          `*『 GROUP INFO 』*\n\n` +
-          `📌 *Name:* ${meta.subject}\n` +
-          `🆔 *ID:* ${meta.id}\n` +
-          `👥 *Members:* ${meta.participants.length}\n` +
-          `📝 *Description:*\n${meta.desc || '_(none)_'}\n\n` +
-          `👑 *Admins:*\n${admins || '_(none)_'}\n\n` +
-          `📅 *Created:* ${new Date(meta.creation * 1000).toLocaleString()}`;
+          `_Group Info_\n\n` +
+          `_Name: ${meta.subject}_\n` +
+          `_ID: ${meta.id}_\n` +
+          `_Members: ${meta.participants.length}_\n` +
+          `_Description: ${meta.desc || 'none'}_\n\n` +
+          `_Admins:_\n${admins || '_none_'}\n\n` +
+          `_Created: ${created}_`;
+
         return sock.sendMessage(m.chat, {
           text: msg,
           mentions: meta.participants.filter(p => p.admin).map(p => p.id)
         }, { quoted: m });
-      } catch (e) {
+
+      } catch (_) {
         return reply('_Failed to fetch group info_');
       }
     }
 
-    // Admin check for remaining commands
-    if (!isAdmin && !isOwner) return reply('_Group admins only_');
-    if (!isBotAdmin) return reply('_Please make me an admin first_');
+    // ── Admin + bot-admin check for all other commands ────────────
+    if (!senderIsAdmin && !isOwner) {
+      return reply('_This command is for group admins only_');
+    }
+    if (!botIsAdmin) {
+      return reply('_Please make me a group admin first_');
+    }
 
-    // ── SETGNAME ──────────────────────────────────────────────────
+    // ── SETGNAME ─────────────────────────────────────────────────
     if (command === 'setgname') {
       if (!text) return reply(`_Usage: ${prefix}setgname <new name>_`);
       try {
         await sock.groupUpdateSubject(m.chat, text);
-        return reply(`_✅ Group name changed to: ${text}_`);
+        return reply(`_Group name changed to: ${text}_`);
       } catch (_) {
         return reply('_Failed to change group name_');
       }
     }
 
-    // ── SETGDESC ──────────────────────────────────────────────────
+    // ── SETGDESC ─────────────────────────────────────────────────
     if (command === 'setgdesc') {
       if (!text) return reply(`_Usage: ${prefix}setgdesc <new description>_`);
       try {
         await sock.groupUpdateDescription(m.chat, text);
-        return reply('_✅ Group description updated_');
+        return reply('_Group description updated_');
       } catch (_) {
         return reply('_Failed to update description_');
       }
@@ -67,26 +93,27 @@ module.exports = {
       try {
         await sock.groupRevokeInvite(m.chat);
         const newLink = await sock.groupInviteCode(m.chat);
-        return reply(`_✅ Invite link reset_\n\nhttps://chat.whatsapp.com/${newLink}`);
+        return reply(`_Invite link reset_\n\n_https://chat.whatsapp.com/${newLink}_`);
       } catch (_) {
         return reply('_Failed to reset invite link_');
       }
     }
 
-    // ── MUTE / UNMUTE ────────────────────────────────────────────
+    // ── MUTE ─────────────────────────────────────────────────────
     if (command === 'mute') {
       try {
         await sock.groupSettingUpdate(m.chat, 'announcement');
-        return reply('_🔇 Group muted — only admins can send messages_');
+        return reply('_Group muted - only admins can send messages_');
       } catch (_) {
         return reply('_Failed to mute group_');
       }
     }
 
+    // ── UNMUTE ───────────────────────────────────────────────────
     if (command === 'unmute') {
       try {
         await sock.groupSettingUpdate(m.chat, 'not_announcement');
-        return reply('_🔊 Group unmuted — everyone can send messages_');
+        return reply('_Group unmuted - everyone can send messages_');
       } catch (_) {
         return reply('_Failed to unmute group_');
       }
