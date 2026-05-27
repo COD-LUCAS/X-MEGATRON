@@ -61,11 +61,7 @@
     "xlsx": "^0.18.5",
     "yt-dlp-wrap": "^2.3.12",
     "yt-search": "^2.12.1",
-    "ytsr": "^3.8.4",
-    "@bochilteam/scraper": "^5.0.1",
-    "@bochilteam/scraper-tiktok": "^5.0.0",
-    "@bochilteam/scraper-facebook": "^5.0.0",
-    "ruhend-scraper": "^9.0.8"
+    "ytsr": "^3.8.4"
   },
   "repository": {
     "type": "git",
