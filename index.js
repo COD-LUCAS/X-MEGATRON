@@ -187,6 +187,7 @@ const start = async () => {
   // ── Group participant events (welcome, goodbye, promote, demote) ────
   sock.ev.on('group-participants.update', async ({ id, participants, action, author }) => {
     try {
+      const isAdmin = require('./library/isAdmin');
       const db      = loadGroupEventsDB();
       const groupDb = db[id] || {};
 
@@ -205,9 +206,15 @@ const start = async () => {
           const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
           const user   = jidStr.split('@')[0];
 
-          const finalMsg = '_' + template
-            .replace(/{user}/g, `@${user}`)
-            .replace(/{group}/g, groupName) + '_';
+          // build message: replace {user} with mention placeholder, wrap all in italic
+          const raw = template
+            .replace(/{user}/g,  `\uFFF0${user}\uFFF1`)
+            .replace(/{group}/g, groupName);
+
+          // wrap non-mention parts in italic
+          const finalMsg = raw
+            .replace(/\uFFF0(\S+)\uFFF1/g, (_, u) => `@${u}`)
+            .replace(/^/, '_').replace(/$/, '_');
 
           await sock.sendMessage(id, {
             text: finalMsg,
@@ -224,9 +231,13 @@ const start = async () => {
           const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
           const user   = jidStr.split('@')[0];
 
-          const finalMsg = '_' + template
-            .replace(/{user}/g, `@${user}`)
-            .replace(/{group}/g, groupName) + '_';
+          const raw = template
+            .replace(/{user}/g,  `\uFFF0${user}\uFFF1`)
+            .replace(/{group}/g, groupName);
+
+          const finalMsg = raw
+            .replace(/\uFFF0(\S+)\uFFF1/g, (_, u) => `@${u}`)
+            .replace(/^/, '_').replace(/$/, '_');
 
           await sock.sendMessage(id, {
             text: finalMsg,
@@ -239,22 +250,21 @@ const start = async () => {
       if (action === 'promote') {
         let gsDb = {};
         try {
-          const gsFile = require('path').join(__dirname, 'database', 'group_settings.json');
-          if (require('fs').existsSync(gsFile)) gsDb = JSON.parse(require('fs').readFileSync(gsFile, 'utf8'));
+          const gsFile = path.join(__dirname, 'database', 'group_settings.json');
+          if (fs.existsSync(gsFile)) gsDb = JSON.parse(fs.readFileSync(gsFile, 'utf8'));
         } catch (_) {}
 
         if (gsDb[id]?.pdm) {
-          const mentionList = participants.map(jid =>
-            typeof jid === 'string' ? jid : (jid.id || String(jid))
-          );
-          const names = mentionList.map(jid => `@${jid.split('@')[0]}`).join(', ');
-          const by    = author ? `@${author.split('@')[0]}` : 'system';
-          if (author) mentionList.push(author);
+          for (const jid of participants) {
+            const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
+            const mentionList = [jidStr];
+            if (author) mentionList.push(author);
 
-          await sock.sendMessage(id, {
-            text: `${names} _was promoted to admin by_ ${by}`,
-            mentions: mentionList
-          }).catch(() => {});
+            await sock.sendMessage(id, {
+              text: `@${jidStr.split('@')[0]} _promoted as admin_`,
+              mentions: mentionList
+            }).catch(() => {});
+          }
         }
       }
 
@@ -262,22 +272,20 @@ const start = async () => {
       if (action === 'demote') {
         let gsDb = {};
         try {
-          const gsFile = require('path').join(__dirname, 'database', 'group_settings.json');
-          if (require('fs').existsSync(gsFile)) gsDb = JSON.parse(require('fs').readFileSync(gsFile, 'utf8'));
+          const gsFile = path.join(__dirname, 'database', 'group_settings.json');
+          if (fs.existsSync(gsFile)) gsDb = JSON.parse(fs.readFileSync(gsFile, 'utf8'));
         } catch (_) {}
 
         if (gsDb[id]?.pdm) {
-          const mentionList = participants.map(jid =>
-            typeof jid === 'string' ? jid : (jid.id || String(jid))
-          );
-          const names = mentionList.map(jid => `@${jid.split('@')[0]}`).join(', ');
-          const by    = author ? `@${author.split('@')[0]}` : 'system';
-          if (author) mentionList.push(author);
+          for (const jid of participants) {
+            const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
+            const mentionList = [jidStr];
+            if (author) mentionList.push(author);
 
-          await sock.sendMessage(id, {
-            text: `${names} _was demoted from admin by_ ${by}`,
-            mentions: mentionList
-          }).catch(() => {});
+            await sock.sendMessage(id, {
+              text: `@${jidStr.split('@')[0]} _demoted as admin_`,
+              mentions: mentionList
+            }).catch(() => {});
         }
       }
 
