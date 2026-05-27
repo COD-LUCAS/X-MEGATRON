@@ -84,7 +84,7 @@ module.exports = {
     if (sub === 'reset') {
       group[type].message = type === 'welcome' ? DEFAULT_WELCOME : DEFAULT_GOODBYE;
       saveDB(db);
-      return reply(`$_{type} message reset to default_`);
+      return reply(`_${type} message reset to default_`);
     }
 
     if (sub === 'status') {
