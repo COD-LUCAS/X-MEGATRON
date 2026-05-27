@@ -1,112 +1,119 @@
-
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const FormData = require('form-data');
-const { downloadContentFromMessage } = require('@itsliaaa/baileys');
+const fs        = require('fs');
+const path      = require('path');
+const axios     = require('axios');
+const FormData  = require('form-data');
 
 const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const getTempPath = (filename) => path.join(TMP_DIR, `${Date.now()}_${filename}`);
-const cleanTemp = (file) => {
+const cleanTemp   = (file) => {
   try { if (file && fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
 };
 
 module.exports = {
-  command: ['identify'],
+  command:  ['identify'],
   category: 'tools',
-  desc: 'Identify song from audio, video, or media URL',
-  usage: '.identify <url> | .identify (reply to audio/video)',
+  desc:     'Identify a song from audio, video, or media URL',
+  usage:    '.identify <url> | reply to audio/video',
 
-  async execute(sock, m, context) {
-    const { reply, args } = context;
+  async execute(sock, m, ctx) {
+    const { reply, args } = ctx;
 
-    const inputUrl = args.join(' ').trim();
-    const quotedText = m.quoted?.body?.trim();
-    let mediaUrl = null;
+    const inputUrl   = args.join(' ').trim();
+    const quotedText = m.quoted?.body?.trim() || m.quoted?.text?.trim() || '';
+    let mediaUrl     = null;
+    let filePath     = null;
 
     try {
-      // Case 1: Reply to audio/video message
-      if (m.quoted && (m.quoted.mtype === 'audioMessage' || m.quoted.mtype === 'videoMessage')) {
-        await reply('_Identifying song from media..._');
 
-        // Download media
-        const quotedMsg = m.quoted.message;
-        let mediaBuffer = await m.quoted.download();
+      // ── Case 1: Reply to audio or video ───────────────────────
+      const isAudio = m.quoted?.mtype === 'audioMessage';
+      const isVideo = m.quoted?.mtype === 'videoMessage';
 
-        if (!mediaBuffer) {
-          throw new Error('Failed to download media');
-        }
+      if (m.quoted && (isAudio || isVideo)) {
+        await reply('_identifying song from media_');
 
-        // Save temp file
-        const fileExt = m.quoted.mtype === 'audioMessage' ? 'mp3' : 'mp4';
-        const filePath = getTempPath(`identify.${fileExt}`);
-        fs.writeFileSync(filePath, mediaBuffer);
+        const buffer = await m.quoted.download().catch(() => null);
+        if (!buffer || buffer.length === 0) return reply('_failed to download media_');
 
-        // Upload to hosting
+        const ext = isAudio ? 'mp3' : 'mp4';
+        filePath  = getTempPath(`identify.${ext}`);
+        fs.writeFileSync(filePath, buffer);
+
         const form = new FormData();
-        form.append('file', fs.createReadStream(filePath));
+        form.append('file', fs.createReadStream(filePath), {
+          filename:    `identify.${ext}`,
+          contentType: isAudio ? 'audio/mpeg' : 'video/mp4'
+        });
 
-        const uploadRes = await axios.post(
-          'https://ar-hosting.pages.dev/upload',
-          form,
-          { headers: form.getHeaders(), timeout: 30000 }
-        );
+        const uploadRes = await axios.post('https://ar-hosting.pages.dev/upload', form, {
+          headers:          { ...form.getHeaders() },
+          timeout:          40000,
+          maxContentLength: Infinity,
+          maxBodyLength:    Infinity
+        });
 
         cleanTemp(filePath);
+        filePath = null;
 
-        if (!uploadRes.data || (!uploadRes.data.url && !uploadRes.data.data)) {
-          throw new Error('Upload failed! No valid URL returned.');
-        }
-
-        mediaUrl = uploadRes.data.url || uploadRes.data.data;
+        mediaUrl = uploadRes.data?.url || uploadRes.data?.data || null;
+        if (!mediaUrl) return reply('_upload failed, no url returned_');
       }
 
-      // Case 2: URL provided in command
+      // ── Case 2: URL from command args ─────────────────────────
       else if (inputUrl && inputUrl.startsWith('http')) {
-        await reply('_Identifying song from link..._');
+        await reply('_identifying song from link_');
         mediaUrl = inputUrl;
       }
 
-      // Case 3: URL in replied message
+      // ── Case 3: URL inside quoted text message ────────────────
       else if (quotedText && quotedText.startsWith('http')) {
-        await reply('_Identifying song from replied link..._');
+        await reply('_identifying song from replied link_');
         mediaUrl = quotedText;
       }
 
-      // No valid input
+      // ── No valid input ────────────────────────────────────────
       else {
-        return reply('_Usage:_\n_.identify <media_url>_\n_or reply to an audio, video, or message containing a media link._');
+        return reply(
+          '_usage_\n\n' +
+          '_.identify <url>_\n' +
+          '_or reply to an audio or video message_'
+        );
       }
 
-      // Identify song using API
-      const identifyRes = await axios.get(`https://jerrycoder.oggyapi.workers.dev/tool/identify?url=${encodeURIComponent(mediaUrl)}`, { timeout: 30000 });
-      const data = identifyRes.data;
+      // ── Identify via API ──────────────────────────────────────
+      const res = await axios.get(
+        `https://jerrycoder.oggyapi.workers.dev/tool/identify?url=${encodeURIComponent(mediaUrl)}`,
+        { timeout: 30000 }
+      );
 
-      if (data.status !== 'success') {
-        throw new Error(data.msg || 'No song found');
+      const data = res.data;
+
+      if (data.status !== 'success' || !data.result) {
+        return reply('_no song found_');
       }
 
       const { title, artist, image, shazam_url } = data.result;
       const fallbackImg = 'https://ar-hosting.pages.dev/1751890521453.jpg';
 
-      const caption = `_Song Identified!_\n\n` +
-        `_Title  : ${title}_\n` +
-        `_Artist : ${artist}_\n\n` +
-        `_Shazam : ${shazam_url}_`;
+      const caption =
+        `_song identified_\n\n` +
+        `_title  : ${title}_\n` +
+        `_artist : ${artist}_\n\n` +
+        `_${shazam_url}_`;
 
-      // Send image with caption
       await sock.sendMessage(m.chat, {
-        image: { url: image || fallbackImg },
+        image:   { url: image || fallbackImg },
         caption: caption
       }, { quoted: m });
 
     } catch (err) {
-      console.error('Identify error:', err);
-      await reply(`_Failed to identify song: ${err.message}_`);
+      cleanTemp(filePath);
+      console.error('identify error:', err.message);
+      return reply('_failed to identify song_');
     }
   }
 };
