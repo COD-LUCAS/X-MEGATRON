@@ -286,6 +286,7 @@ const start = async () => {
               text: `@${jidStr.split('@')[0]} _demoted as admin_`,
               mentions: mentionList
             }).catch(() => {});
+          }
         }
       }
 
