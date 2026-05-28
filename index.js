@@ -8,6 +8,22 @@ const log  = require('./library/console');
 
 process.on('uncaughtException',  (e) => log.error('UncaughtException: ' + e.message));
 process.on('unhandledRejection', (e) => log.error('UnhandledRejection: ' + (e?.message || e)));
+// ── Startup cleanup — wipe rt_ plugins and eval tmp files ──
+try {
+  const extDir = path.join(__dirname, 'database', 'external_plugins');
+  if (fs.existsSync(extDir)) {
+    fs.readdirSync(extDir)
+      .filter(f => f.startsWith('rt_') && f.endsWith('.js'))
+      .forEach(f => { try { fs.unlinkSync(path.join(extDir, f)); } catch (_) {} });
+  }
+  const dbDir = path.join(__dirname, 'database');
+  if (fs.existsSync(dbDir)) {
+    fs.readdirSync(dbDir)
+      .filter(f => (f.startsWith('eval_') && f.endsWith('.txt')) || (f.startsWith('eval_') && f.endsWith('.js')))
+      .forEach(f => { try { fs.unlinkSync(path.join(dbDir, f)); } catch (_) {} });
+  }
+} catch (_) {}
+
 
 // ── Temp folder redirect (prevents /tmp overflow on hosted panels) ──
 const customTemp = path.join(process.cwd(), 'temp');
