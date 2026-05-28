@@ -165,17 +165,19 @@ module.exports = async (sock, m) => {
 
   const isFromMe = m.fromMe === true;
 
-  // ── Safe body extraction ──
+  // ── FIX: Safe body extraction — always a string ──
   const body = (
     m.message?.conversation?.trim() ||
     m.message?.extendedTextMessage?.text?.trim() ||
     m.message?.imageMessage?.caption?.trim() ||
     m.message?.videoMessage?.caption?.trim() ||
     m.message?.documentMessage?.caption?.trim() ||
+    m.message?.buttonsResponseMessage?.selectedButtonId?.trim() ||
     m.body?.trim() ||
     ''
   );
 
+  // Update m.body to the safe resolved value
   m.body = body;
   m.text = body;
 
@@ -282,6 +284,7 @@ module.exports = async (sock, m) => {
     groupMetadata: meta,
     getGroupMetadata: getMeta,
 
+    // ── NULL-SAFE REPLY — never sends empty/null/undefined ──
     reply: (txt) => {
       if (txt === null || txt === undefined) return Promise.resolve();
       if (typeof txt === 'string' && !txt.trim()) return Promise.resolve();
@@ -298,33 +301,21 @@ module.exports = async (sock, m) => {
     ownerNumbers: sudoList,
     config,
 
+    // ── Welcome/Goodbye control helpers (usable from plugins) ──
     getGroupEventsDB: loadGroupEventsDB,
     saveGroupEventsDB,
   };
 
   loader.autoReveal(sock, m);
 
-  // ── AUTO REACT HANDLER ──────────────────────────────────────────────
-  try {
-    const autoReact = require('./plugins/autoreact');
-    const ar = autoReact.load();
-    
-    if (ar.enabled && body && !isFromMe) {
-      let shouldReact = false;
-      
-      if (ar.mode === 'all') {
-        shouldReact = true;
-      } else if (ar.mode === 'bot') {
-        shouldReact = prefixes.some(p => body.startsWith(p));
-      }
-      
-      if (shouldReact) {
-        const emojis = autoReact.EMOJIS;
-        const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
-        await sock.sendMessage(m.chat, { react: { text: randomEmoji, key: m.key } }).catch(() => {});
+  // ── Group moderation — runs on EVERY group message, before anything else ──
+  if (m.isGroup && !isFromMe) {
+    for (const p of loader.plugins) {
+      if (p.groupFilter) {
+        try { await p.groupFilter(sock, m, ctx); } catch (_) {}
       }
     }
-  } catch (_) {}
+  }
 
   // ── Sticker bond handler ────────────────────────────────────────
   if (m.message?.stickerMessage) {
@@ -351,17 +342,6 @@ module.exports = async (sock, m) => {
       }
     }
     return;
-  }
-
-  // ── Group moderation runs BEFORE command check ─────────────────
-  if (m.isGroup && body) {
-    try {
-      for (const p of loader.plugins) {
-        if (p.groupFilter) {
-          try { await p.groupFilter(sock, m, ctx); } catch (_) {}
-        }
-      }
-    } catch (_) {}
   }
 
   // ── Prefix check ────────────────────────────────────────────────
