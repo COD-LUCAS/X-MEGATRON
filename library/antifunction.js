@@ -1,5 +1,9 @@
-
-
+/**
+ * library/antifunction.js
+ * Central data store for all group protection settings.
+ * Adapted from KnightBot-MD lib/index.js — X-Megatron style.
+ * Data saved to: database/group_data.json
+ */
 
 'use strict';
 
