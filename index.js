@@ -1,4 +1,3 @@
-
 require('./library/console');
 require('dotenv').config();
 
