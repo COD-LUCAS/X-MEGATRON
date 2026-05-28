@@ -1,8 +1,8 @@
 /**
  * library/antifunction.js
- * Central data store for all group protection settings.
- * Adapted from KnightBot-MD lib/index.js — X-Megatron style.
- * Data saved to: database/group_data.json
+ * Single data layer for ALL group anti-features.
+ * Saves to: database/group_data.json
+ * Used by: plugins/antispam.js
  */
 
 'use strict';
@@ -12,19 +12,30 @@ const path = require('path');
 
 const DATA_FILE = path.join(__dirname, '..', 'database', 'group_data.json');
 
-// ── Load / Save ───────────────────────────────────────────────────────
+const DEFAULTS = {
+  antilink:    {},
+  antibadword: {},
+  antispam:    {},
+  antitag:     {},
+  warnings:    {}
+};
+
 function load() {
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      const def = { antilink: {}, antibadword: {}, antispam: {}, warnings: {} };
       fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-      fs.writeFileSync(DATA_FILE, JSON.stringify(def, null, 2));
-      return def;
+      fs.writeFileSync(DATA_FILE, JSON.stringify(DEFAULTS, null, 2));
+      return JSON.parse(JSON.stringify(DEFAULTS));
     }
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    // ensure all keys exist
+    for (const k of Object.keys(DEFAULTS)) {
+      if (!raw[k]) raw[k] = {};
+    }
+    return raw;
   } catch (e) {
-    console.error('antifunction load error:', e.message);
-    return { antilink: {}, antibadword: {}, antispam: {}, warnings: {} };
+    console.error('[antifunction] load error:', e.message);
+    return JSON.parse(JSON.stringify(DEFAULTS));
   }
 }
 
@@ -34,134 +45,102 @@ function save(data) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
     return true;
   } catch (e) {
-    console.error('antifunction save error:', e.message);
+    console.error('[antifunction] save error:', e.message);
     return false;
   }
 }
 
-// ── ANTILINK ─────────────────────────────────────────────────────────
-function setAntilink(groupId, enabled, action = 'delete') {
-  const data = load();
-  if (!data.antilink) data.antilink = {};
-  data.antilink[groupId] = { enabled, action };
-  return save(data);
-}
+// ── ANTILINK ──────────────────────────────────────────────────────────
+const setAntilink    = (gid, enabled, action = 'delete') => {
+  const d = load();
+  d.antilink[gid] = { enabled, action };
+  return save(d);
+};
+const getAntilink    = (gid) => { const d = load(); return d.antilink[gid] || null; };
+const removeAntilink = (gid) => {
+  const d = load();
+  delete d.antilink[gid];
+  return save(d);
+};
 
-function getAntilink(groupId) {
-  const data = load();
-  return data.antilink?.[groupId] || null;
-}
-
-function removeAntilink(groupId) {
-  const data = load();
-  if (data.antilink?.[groupId]) {
-    delete data.antilink[groupId];
-    save(data);
-  }
-}
-
-// ── ANTIBADWORD ──────────────────────────────────────────────────────
-function setAntibadword(groupId, enabled, action = 'delete') {
-  const data = load();
-  if (!data.antibadword) data.antibadword = {};
-  if (!data.antibadword[groupId]) data.antibadword[groupId] = { enabled, action, words: [] };
-  else { data.antibadword[groupId].enabled = enabled; data.antibadword[groupId].action = action; }
-  return save(data);
-}
-
-function getAntibadword(groupId) {
-  const data = load();
-  return data.antibadword?.[groupId] || null;
-}
-
-function removeAntibadword(groupId) {
-  const data = load();
-  if (data.antibadword?.[groupId]) {
-    delete data.antibadword[groupId];
-    save(data);
-  }
-}
-
-function addBadword(groupId, word) {
-  const data = load();
-  if (!data.antibadword) data.antibadword = {};
-  if (!data.antibadword[groupId]) data.antibadword[groupId] = { enabled: false, action: 'delete', words: [] };
-  if (!data.antibadword[groupId].words.includes(word)) {
-    data.antibadword[groupId].words.push(word);
-    save(data);
-    return true;
-  }
-  return false; // already exists
-}
-
-function removeBadword(groupId, word) {
-  const data = load();
-  const words = data.antibadword?.[groupId]?.words || [];
+// ── ANTIBADWORD ───────────────────────────────────────────────────────
+const setAntibadword = (gid, enabled, action = 'delete') => {
+  const d = load();
+  const existing = d.antibadword[gid] || { words: [] };
+  d.antibadword[gid] = { enabled, action, words: existing.words };
+  return save(d);
+};
+const getAntibadword    = (gid) => { const d = load(); return d.antibadword[gid] || null; };
+const removeAntibadword = (gid) => {
+  const d = load();
+  delete d.antibadword[gid];
+  return save(d);
+};
+const addBadword = (gid, word) => {
+  const d = load();
+  if (!d.antibadword[gid]) d.antibadword[gid] = { enabled: false, action: 'delete', words: [] };
+  if (d.antibadword[gid].words.includes(word)) return false;
+  d.antibadword[gid].words.push(word);
+  return save(d);
+};
+const removeBadword = (gid, word) => {
+  const d = load();
+  const words = d.antibadword[gid]?.words || [];
   const idx = words.indexOf(word);
   if (idx === -1) return false;
   words.splice(idx, 1);
-  save(data);
-  return true;
-}
+  return save(d);
+};
+const getBadwords = (gid) => { const d = load(); return d.antibadword[gid]?.words || []; };
 
-function getBadwords(groupId) {
-  const data = load();
-  return data.antibadword?.[groupId]?.words || [];
-}
+// ── ANTISPAM ──────────────────────────────────────────────────────────
+const setAntispam    = (gid, enabled, limit = 5) => {
+  const d = load();
+  d.antispam[gid] = { enabled, limit };
+  return save(d);
+};
+const getAntispam    = (gid) => { const d = load(); return d.antispam[gid] || null; };
+const removeAntispam = (gid) => {
+  const d = load();
+  delete d.antispam[gid];
+  return save(d);
+};
 
-// ── ANTISPAM ─────────────────────────────────────────────────────────
-function setAntispam(groupId, enabled, limit = 5) {
-  const data = load();
-  if (!data.antispam) data.antispam = {};
-  data.antispam[groupId] = { enabled, limit };
-  return save(data);
-}
+// ── ANTITAG ───────────────────────────────────────────────────────────
+const setAntitag    = (gid, enabled, action = 'delete') => {
+  const d = load();
+  d.antitag[gid] = { enabled, action };
+  return save(d);
+};
+const getAntitag    = (gid) => { const d = load(); return d.antitag[gid] || null; };
+const removeAntitag = (gid) => {
+  const d = load();
+  delete d.antitag[gid];
+  return save(d);
+};
 
-function getAntispam(groupId) {
-  const data = load();
-  return data.antispam?.[groupId] || null;
-}
-
-function removeAntispam(groupId) {
-  const data = load();
-  if (data.antispam?.[groupId]) {
-    delete data.antispam[groupId];
-    save(data);
-  }
-}
-
-// ── WARNINGS ─────────────────────────────────────────────────────────
-function incrementWarning(groupId, userId) {
-  const data = load();
-  if (!data.warnings) data.warnings = {};
-  if (!data.warnings[groupId]) data.warnings[groupId] = {};
-  if (!data.warnings[groupId][userId]) data.warnings[groupId][userId] = 0;
-  data.warnings[groupId][userId]++;
-  save(data);
-  return data.warnings[groupId][userId];
-}
-
-function resetWarning(groupId, userId) {
-  const data = load();
-  if (data.warnings?.[groupId]?.[userId] !== undefined) {
-    data.warnings[groupId][userId] = 0;
-    save(data);
-  }
-}
-
-function getWarnings(groupId, userId) {
-  const data = load();
-  return data.warnings?.[groupId]?.[userId] || 0;
-}
+// ── WARNINGS ──────────────────────────────────────────────────────────
+const incrementWarning = (gid, uid) => {
+  const d = load();
+  if (!d.warnings[gid]) d.warnings[gid] = {};
+  d.warnings[gid][uid] = (d.warnings[gid][uid] || 0) + 1;
+  save(d);
+  return d.warnings[gid][uid];
+};
+const resetWarning = (gid, uid) => {
+  const d = load();
+  if (d.warnings[gid]) { d.warnings[gid][uid] = 0; save(d); }
+};
+const getWarnings = (gid, uid) => {
+  const d = load();
+  return d.warnings[gid]?.[uid] || 0;
+};
 
 module.exports = {
-  // antilink
   setAntilink, getAntilink, removeAntilink,
-  // antibadword
   setAntibadword, getAntibadword, removeAntibadword,
   addBadword, removeBadword, getBadwords,
-  // antispam
   setAntispam, getAntispam, removeAntispam,
-  // warnings
+  setAntitag, getAntitag, removeAntitag,
   incrementWarning, resetWarning, getWarnings,
 };
