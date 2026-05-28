@@ -8,6 +8,7 @@ const log  = require('./library/console');
 
 process.on('uncaughtException',  (e) => log.error('UncaughtException: ' + e.message));
 process.on('unhandledRejection', (e) => log.error('UnhandledRejection: ' + (e?.message || e)));
+
 // ── Startup cleanup — wipe rt_ plugins and eval tmp files ──
 try {
   const extDir = path.join(__dirname, 'database', 'external_plugins');
@@ -23,7 +24,6 @@ try {
       .forEach(f => { try { fs.unlinkSync(path.join(dbDir, f)); } catch (_) {} });
   }
 } catch (_) {}
-
 
 // ── Temp folder redirect (prevents /tmp overflow on hosted panels) ──
 const customTemp = path.join(process.cwd(), 'temp');
@@ -179,21 +179,19 @@ const start = async () => {
         const num = call.from?.split('@')[0] || '';
         if (wl.some(n => num.endsWith(n.replace(/\D/g, '').slice(-10)))) continue;
 
-        // reject
         try {
           if (typeof sock.rejectCall === 'function') {
             await sock.rejectCall(call.id, call.from).catch(() => {});
           }
         } catch (_) {}
 
-        // notify only once per minute per caller
         if (!antiCallNotified.has(call.from)) {
           antiCallNotified.add(call.from);
           setTimeout(() => antiCallNotified.delete(call.from), 60000);
           if (db.__global.callRejectMsg) {
             await sock.sendMessage(call.from, { text: db.__global.callRejectMsg }).catch(() => {});
           } else {
-            await sock.sendMessage(call.from, { text: '📵 Anticall is enabled. Your call was rejected.' }).catch(() => {});
+            await sock.sendMessage(call.from, { text: '_Anticall is enabled. Your call was rejected_' }).catch(() => {});
           }
         }
       }
@@ -203,11 +201,9 @@ const start = async () => {
   // ── Group participant events (welcome, goodbye, promote, demote) ────
   sock.ev.on('group-participants.update', async ({ id, participants, action, author }) => {
     try {
-      const isAdmin = require('./library/isAdmin');
       const db      = loadGroupEventsDB();
       const groupDb = db[id] || {};
 
-      // Fetch group name once for all actions
       let groupName = id;
       try {
         const meta = await sock.groupMetadata(id);
@@ -216,21 +212,15 @@ const start = async () => {
 
       // ── Welcome ──
       if (action === 'add' && groupDb.welcome?.enabled) {
-        const template = groupDb.welcome.message || '{user} joined {group}';
+        const template = groupDb.welcome.message || '_Welcome {user} to {group}_';
 
         for (const jid of participants) {
           const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
           const user   = jidStr.split('@')[0];
 
-          // build message: replace {user} with mention placeholder, wrap all in italic
-          const raw = template
-            .replace(/{user}/g,  `\uFFF0${user}\uFFF1`)
+          const finalMsg = template
+            .replace(/{user}/g, `@${user}`)
             .replace(/{group}/g, groupName);
-
-          // wrap non-mention parts in italic
-          const finalMsg = raw
-            .replace(/\uFFF0(\S+)\uFFF1/g, (_, u) => `@${u}`)
-            .replace(/^/, '_').replace(/$/, '_');
 
           await sock.sendMessage(id, {
             text: finalMsg,
@@ -241,19 +231,15 @@ const start = async () => {
 
       // ── Goodbye ──
       if ((action === 'remove' || action === 'leave') && groupDb.goodbye?.enabled) {
-        const template = groupDb.goodbye.message || '{user} left {group}';
+        const template = groupDb.goodbye.message || '_Goodbye {user}_';
 
         for (const jid of participants) {
           const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
           const user   = jidStr.split('@')[0];
 
-          const raw = template
-            .replace(/{user}/g,  `\uFFF0${user}\uFFF1`)
+          const finalMsg = template
+            .replace(/{user}/g, `@${user}`)
             .replace(/{group}/g, groupName);
-
-          const finalMsg = raw
-            .replace(/\uFFF0(\S+)\uFFF1/g, (_, u) => `@${u}`)
-            .replace(/^/, '_').replace(/$/, '_');
 
           await sock.sendMessage(id, {
             text: finalMsg,
@@ -277,7 +263,7 @@ const start = async () => {
             if (author) mentionList.push(author);
 
             await sock.sendMessage(id, {
-              text: `@${jidStr.split('@')[0]} _promoted as admin_`,
+              text: `@${jidStr.split('@')[0]} _promoted as admin by_ @${author?.split('@')[0] || 'someone'}`,
               mentions: mentionList
             }).catch(() => {});
           }
@@ -299,7 +285,7 @@ const start = async () => {
             if (author) mentionList.push(author);
 
             await sock.sendMessage(id, {
-              text: `@${jidStr.split('@')[0]} _demoted as admin_`,
+              text: `@${jidStr.split('@')[0]} _demoted as admin by_ @${author?.split('@')[0] || 'someone'}`,
               mentions: mentionList
             }).catch(() => {});
           }
@@ -347,7 +333,7 @@ const start = async () => {
     const raw = messages[0];
     if (!raw?.message) return;
 
-    // ── FIX 1: Block BAE5 WhatsApp system-generated message IDs ──
+    // Block BAE5 WhatsApp system-generated message IDs
     if (raw.key?.id?.startsWith('BAE5') && raw.key.id.length === 16) return;
 
     // Unwrap ephemeral
@@ -360,8 +346,7 @@ const start = async () => {
     if (SILENT_TYPES.has(mtype)) return;
     if (raw.messageStubType) return;
 
-    // ── FIX 2: Full safe message content extraction ──
-    // All message types resolved — always produces a string, never undefined
+    // Full safe message content extraction
     const messageContent = (
       raw.message.conversation?.trim() ||
       raw.message.extendedTextMessage?.text?.trim() ||
@@ -373,13 +358,12 @@ const start = async () => {
       ''
     );
 
-    // Allow sticker messages through (no text body needed)
     const isStickerMsg = !!raw.message.stickerMessage;
 
-    // Block truly empty text messages (not stickers/media commands)
+    // Block truly empty text messages
     if (!isStickerMsg && !messageContent) return;
 
-    // Rate limiting & dedup (only for non-bot messages)
+    // Rate limiting & dedup
     if (!raw.key.fromMe) {
       if (seenIds.has(raw.key.id)) return;
       seenIds.add(raw.key.id);
