@@ -9,7 +9,7 @@ const SETTINGS_FILE = path.join(DB_DIR, "settings.json");
 
 // Default settings
 let settings = {
-  botName: "X MEGATRON",
+  botName: "𐍇 - 𐌼𐌴𐌾𐌰𐍄𐍂𐍈𐍀",
   menuImage: "https://files.catbox.moe/a6pqf1.jpg",
   owner: "COD-LUCAS"
 };
