@@ -24,7 +24,7 @@ module.exports = {
       const prefix = process.env.PREFIX || ".";
 
       const text = `
-_*𝚾 𝚳𝚵𝐆𝚫𝚻𝚪𝚯𝚴*_
+_𐍇 - 𐌼𐌴𐌾𐌰𐍄𐍂𐍈𐍀_
 
 _Status  : Online_
 _Mode    : ${mode}_
