@@ -21,7 +21,7 @@ const isAdminHelper = require('../library/isAdmin');
 
 const WARN_LIMIT = 3;
 
-// ── Link detection (antilink.js) ──────────────────
+// ── Link detection (from KnightBot lib/antilink.js) ──────────────────
 const URL_REGEX = /(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}(\/[^\s]*)?/i;
 const WA_GROUP  = /chat\.whatsapp\.com\/[A-Za-z0-9]{20,}/i;
 const WA_CHAN   = /wa\.me\/channel\/[A-Za-z0-9]{20,}/i;
@@ -31,7 +31,7 @@ function containsLink(text) {
   return URL_REGEX.test(text);
 }
 
-// ── Built-in bad word list (builtin) ──────────────────────────
+// ── Built-in bad word list (from KnightBot) ──────────────────────────
 const BUILTIN_BADWORDS = [
   'gandu','madarchod','bhosdike','bsdk','fucker','bhosda','lauda','laude',
   'betichod','chutiya','maa ki chut','behenchod','behen ki chut','randi',
@@ -193,7 +193,7 @@ const groupFilter = async (sock, m, ctx) => {
 // ── Commands ──────────────────────────────────────────────────────────
 module.exports = {
   command: ['antilink', 'antibadword', 'antispam'],
-  category: 'ANTI-FUNCTIONS',
+  category: 'group',
   group: true,
   desc: 'Group protection — antilink, antibadword, antispam',
 
