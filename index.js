@@ -1,3 +1,4 @@
+
 require('./library/console');
 require('dotenv').config();
 
@@ -127,6 +128,12 @@ const loadGroupEventsDB = () => {
   } catch (_) {}
   return {};
 };
+
+// ── Load autotyping module ───────────────────────────────────────────
+let autotyping = null;
+try {
+  autotyping = require('./plugins/autotyping');
+} catch (_) {}
 
 // ── Start ────────────────────────────────────────────────────────────
 const start = async () => {
@@ -325,7 +332,7 @@ const start = async () => {
     }
   });
 
-  // ── Message handler ───────────────────────────────────────────────
+  // ── Message handler with auto-typing ──────────────────────────────
   const handler = require('./main');
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -374,12 +381,31 @@ const start = async () => {
       if (rateMap.has(rlKey) && now - rateMap.get(rlKey) < RATE_MS) return;
       rateMap.set(rlKey, now);
       if (rateMap.size > 500) rateMap.delete(rateMap.keys().next().value);
+
+      // ── AUTO-TYPING: Show typing indicator for incoming messages ──
+      if (autotyping && messageContent && messageContent.length > 0) {
+        const chatId = raw.key.remoteJid;
+        // Don't show typing for command messages (starting with .)
+        if (!messageContent.startsWith('.')) {
+          autotyping.handleAutotypingForMessage(sock, chatId, messageContent).catch(() => {});
+        }
+      }
     }
 
     try {
       const { smsg } = require('./library/manager');
       const m = smsg(sock, raw);
-      if (m) await handler(sock, m);
+      if (m) {
+        // Check if this is a command (starts with .) - show typing after command execution
+        const isCommand = messageContent.startsWith('.');
+        
+        await handler(sock, m);
+        
+        // ── AUTO-TYPING: Show brief typing after command execution ──
+        if (isCommand && autotyping && raw.key.remoteJid) {
+          autotyping.showTypingAfterCommand(sock, raw.key.remoteJid).catch(() => {});
+        }
+      }
     } catch (err) {
       log.error(`Error handling message: ${err.message}`);
     }
