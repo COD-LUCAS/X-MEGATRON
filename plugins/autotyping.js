@@ -1,109 +1,97 @@
-const fs = require('fs');
+/**
+ * autotyping.js — plugins/autotyping.js
+ * Command: .autotyping on/off
+ * Shows typing indicator before every bot response when enabled.
+ * Owner only. Wired via handleText hook — fires before every reply.
+ */
+
+'use strict';
+
+const fs   = require('fs');
 const path = require('path');
 
-// Path to store the configuration
-const configPath = path.join(__dirname, '..', 'database', 'autotyping.json');
+const CONFIG_FILE = path.join(__dirname, '..', 'database', 'autotyping.json');
 
-// Initialize configuration file if it doesn't exist
-function initConfig() {
-    if (!fs.existsSync(configPath)) {
-        fs.writeFileSync(configPath, JSON.stringify({ enabled: false }, null, 2));
-    }
-    return JSON.parse(fs.readFileSync(configPath));
+// ── Config helpers ────────────────────────────────────────────────────
+function loadConfig() {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) return { enabled: false };
+    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch (_) { return { enabled: false }; }
 }
 
-// Check if autotyping is enabled
-function isAutotypingEnabled() {
-    try {
-        const config = initConfig();
-        return config.enabled;
-    } catch (error) {
-        console.error('Error checking autotyping status:', error);
-        return false;
-    }
+function saveConfig(data) {
+  try {
+    fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2));
+  } catch (_) {}
 }
 
-// Handle typing indicator for messages
-async function handleAutotypingForMessage(sock, chatId, userMessage) {
-    if (isAutotypingEnabled() && userMessage && userMessage.length > 0) {
-        try {
-            await sock.presenceSubscribe(chatId);
-            await sock.sendPresenceUpdate('available', chatId);
-            await new Promise(resolve => setTimeout(resolve, 500));
-            await sock.sendPresenceUpdate('composing', chatId);
-            
-            const typingDelay = Math.max(2000, Math.min(6000, userMessage.length * 100));
-            await new Promise(resolve => setTimeout(resolve, typingDelay));
-            
-            await sock.sendPresenceUpdate('composing', chatId);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            await sock.sendPresenceUpdate('paused', chatId);
-            return true;
-        } catch (error) {
-            console.error('Error sending typing indicator:', error);
-            return false;
-        }
-    }
-    return false;
+// ── Typing indicator ──────────────────────────────────────────────────
+async function showTyping(sock, chatId, msgLength = 20) {
+  try {
+    await sock.presenceSubscribe(chatId).catch(() => {});
+    await sock.sendPresenceUpdate('available', chatId).catch(() => {});
+    await new Promise(r => setTimeout(r, 300));
+    await sock.sendPresenceUpdate('composing', chatId).catch(() => {});
+
+    // Delay based on message length: min 2s, max 6s
+    const delay = Math.max(2000, Math.min(6000, msgLength * 100));
+    await new Promise(r => setTimeout(r, delay));
+
+    await sock.sendPresenceUpdate('paused', chatId).catch(() => {});
+  } catch (_) {}
 }
 
-// Show typing after command execution
-async function showTypingAfterCommand(sock, chatId) {
-    if (isAutotypingEnabled()) {
-        try {
-            await sock.presenceSubscribe(chatId);
-            await sock.sendPresenceUpdate('composing', chatId);
-            await new Promise(resolve => setTimeout(resolve, 800));
-            await sock.sendPresenceUpdate('paused', chatId);
-            return true;
-        } catch (error) {
-            console.error('Error sending post-command typing:', error);
-            return false;
-        }
-    }
-    return false;
-}
-
+// ── Export ────────────────────────────────────────────────────────────
 module.exports = {
-    name: 'autotyping',
-    category: 'owner',
-    desc: 'Toggle auto-typing indicator on/off',
-    usage: '.autotyping on/off',
-    async execute(sock, message, args, fromMe, chatId) {
-        try {
-            const config = initConfig();
+  command:  ['autotyping'],
+  category: 'owner',
+  desc:     'Show typing indicator before every bot response',
+  usage:    '.autotyping on | off',
+  owner:    true,
 
-            if (args && args.length > 0) {
-                const action = args[0].toLowerCase();
-                if (action === 'on' || action === 'enable') {
-                    config.enabled = true;
-                } else if (action === 'off' || action === 'disable') {
-                    config.enabled = false;
-                } else {
-                    await sock.sendMessage(chatId, {
-                        text: '❌ Invalid option! Use: .autotyping on/off'
-                    });
-                    return;
-                }
-            } else {
-                config.enabled = !config.enabled;
-            }
+  // handleText fires on every incoming message — used to trigger typing
+  async handleText(sock, m, ctx) {
+    const cfg = loadConfig();
+    if (!cfg.enabled) return;
 
-            fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    // Only show typing for messages that would trigger a bot reply
+    // (prefix messages or chatbot triggers — not system/empty)
+    if (!m.body || !m.body.trim()) return;
+    if (m.fromMe) return;
 
-            await sock.sendMessage(chatId, {
-                text: `✅ Auto-typing has been ${config.enabled ? 'enabled' : 'disabled'}!`
-            });
+    await showTyping(sock, m.chat, m.body.length);
+  },
 
-        } catch (error) {
-            console.error('Error in autotyping command:', error);
-            await sock.sendMessage(chatId, {
-                text: '❌ Error processing command!'
-            });
-        }
-    },
-    // Export helper functions for use in index.js
-    isAutotypingEnabled,
-    handleAutotypingForMessage,
-    showTypingAfterCommand
+  async execute(sock, m, ctx) {
+    const { args, reply, isOwner } = ctx;
+    if (!isOwner) return reply('_owner only command_');
+
+    const cfg = loadConfig();
+    const sub = args[0]?.toLowerCase();
+
+    if (!sub) {
+      return reply(
+        `_autotyping: ${cfg.enabled ? 'on' : 'off'}_\n\n` +
+        `_.autotyping on_\n` +
+        `_.autotyping off_`
+      );
+    }
+
+    if (sub === 'on') {
+      if (cfg.enabled) return reply('_autotyping already on_');
+      cfg.enabled = true;
+      saveConfig(cfg);
+      return reply('_autotyping on_');
+    }
+
+    if (sub === 'off') {
+      cfg.enabled = false;
+      saveConfig(cfg);
+      return reply('_autotyping off_');
+    }
+
+    return reply('_options: on | off_');
+  }
 };
