@@ -1,57 +1,82 @@
 /**
  * antispam.js — plugins/antispam.js
- * Commands: .antilink, .antibadword, .antispam
- * groupFilter() runs on every group message via main.js
+ * Commands: .antilink .antibadword .antispam .antitag
  *
- * Groups only. Skips admins and owner.
- * Uses library/antifunction.js for data and library/isAdmin.js for checks.
+ * Flow:
+ *   main.js calls groupFilter() on EVERY group message
+ *   → checks antispam → antilink → antibadword → antitag
+ *   → uses isAdmin.js for LIVE admin check every time
+ *   → uses antifunction.js to read/write settings
+ *
+ * Groups only. Owner and group admins are always skipped.
  */
 
 'use strict';
 
+const isAdminHelper = require('../library/isAdmin');
+
 const {
-  setAntilink, getAntilink, removeAntilink,
+  setAntilink,    getAntilink,    removeAntilink,
   setAntibadword, getAntibadword, removeAntibadword,
-  addBadword, removeBadword, getBadwords,
-  setAntispam, getAntispam, removeAntispam,
+  addBadword,     removeBadword,  getBadwords,
+  setAntispam,    getAntispam,    removeAntispam,
+  setAntitag,     getAntitag,     removeAntitag,
   incrementWarning, resetWarning,
 } = require('../library/antifunction');
 
-const isAdminHelper = require('../library/isAdmin');
-
 const WARN_LIMIT = 3;
 
-// ── Link detection (from KnightBot lib/antilink.js) ──────────────────
-const URL_REGEX = /(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}(\/[^\s]*)?/i;
-const WA_GROUP  = /chat\.whatsapp\.com\/[A-Za-z0-9]{20,}/i;
-const WA_CHAN   = /wa\.me\/channel\/[A-Za-z0-9]{20,}/i;
-const TG_LINK   = /t\.me\/[A-Za-z0-9_]+/i;
+// ── Link detection ────────────────────────────────────────────────────
+// Catches http/https URLs, WhatsApp group links, Telegram links, bare domains
+const LINK_PATTERNS = [
+  /https?:\/\/[^\s]+/i,
+  /chat\.whatsapp\.com\/[A-Za-z0-9]{10,}/i,
+  /wa\.me\/[^\s]+/i,
+  /t\.me\/[^\s]+/i,
+  /([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/[^\s]*)?/i,
+];
 
 function containsLink(text) {
-  return URL_REGEX.test(text);
+  return LINK_PATTERNS.some(r => r.test(text));
 }
 
-// ── Built-in bad word list (from KnightBot) ──────────────────────────
+// ── Mass tag detection (@everyone / tagging many people) ─────────────
+function containsMassTag(text, mentions = []) {
+  // More than 5 mentions = mass tag
+  if (mentions.length >= 5) return true;
+  // @everyone / @here type text
+  if (/@everyone|@all|@here/i.test(text)) return true;
+  return false;
+}
+
+// ── Built-in bad word list ────────────────────────────────────────────
 const BUILTIN_BADWORDS = [
-  'gandu','madarchod','bhosdike','bsdk','fucker','bhosda','lauda','laude',
-  'betichod','chutiya','maa ki chut','behenchod','behen ki chut','randi',
-  'chuchi','boobs','boobies','tits','idiot','nigga','fuck','dick','bitch',
-  'bastard','asshole','teri ma ki chut','teri maa ki','lund','mc','lodu',
-  'benchod','shit','piss','crap','slut','whore','prick','motherfucker',
-  'cock','cunt','pussy','twat','wanker','douchebag','jackass','moron',
-  'retard','scumbag','skank','arse','bugger','chut','madar','chodne',
-  'sala kutta','harami','randi ki aulad','gaand mara','chodu','gandu saala',
-  'kameena','haramzada','chudai','fck','fckr','fuk','fukk','fcuk','btch',
-  'f*ck','a**hole','f@ck','b!tch','d!ck','n!gga','a$$','l0du',
-  'spic','chink','cracker','gook','kike','paki','honky','wetback','raghead',
-  'blowjob','handjob','cum','cumshot','jizz','deepthroat','fap','hentai',
-  'milf','anal','orgasm','dildo','vibrator','gangbang','threesome','porn',
-  'sex','xxx','fag','faggot','dyke','tranny','homo','sissy','fairy','lesbo',
-  'weed','pot','coke','heroin','meth','crack','dope','bong','kush','hash',
+  // English
+  'fuck','fucker','fucking','fck','fuk','f*ck','f@ck','fcuk',
+  'shit','bitch','btch','b*tch','b!tch','bastard','asshole','a**hole','a$$',
+  'dick','d!ck','cock','pussy','cunt','twat','prick','whore','slut',
+  'motherfucker','wanker','douchebag','jackass','scumbag',
+  'nigga','n!gga','nigger','faggot','fag','retard',
+  'porn','sex','xxx','anal','dildo','blowjob','handjob','cum','jizz',
+  'hentai','milf','orgasm','vibrator','gangbang','threesome','deepthroat',
+  // Hindi/Hinglish
+  'madarchod','bhosdike','bsdk','bhosda','lauda','laude','lund',
+  'chutiya','chut','randi','harami','haramzada','kameena',
+  'behenchod','betichod','benchod','chodu','lodu','l0du','gandu',
+  'gaand','gaand mara','chodne','chudai',
+  'sala kutta','randi ki aulad','maa ki chut','teri ma ki chut',
+  'teri maa ki','behen ki chut',
+  // Racial/slurs
+  'spic','chink','cracker','gook','kike','paki','honky','wetback',
 ];
 
 function hasBadWord(text, customWords = []) {
-  const clean = text.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const clean = text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
   const all   = [...new Set([...BUILTIN_BADWORDS, ...customWords.map(w => w.toLowerCase())])];
   const words = clean.split(' ');
 
@@ -59,80 +84,96 @@ function hasBadWord(text, customWords = []) {
     if (w.length < 2) continue;
     if (all.includes(w)) return w;
   }
+  // Multi-word phrases
   for (const bad of all) {
     if (bad.includes(' ') && clean.includes(bad)) return bad;
   }
   return null;
 }
 
-// ── Spam tracker (in-memory) ─────────────────────────────────────────
-const spamTracker = {};
+// ── Spam tracker ─────────────────────────────────────────────────────
+const spamMap = {};
 
-function trackSpam(chatId, sender, limit) {
-  const key = `${chatId}::${sender}`;
+function isSpamming(chatId, sender, limit) {
+  const key = `${chatId}|${sender}`;
   const now = Date.now();
-  if (!spamTracker[key]) spamTracker[key] = [];
-  spamTracker[key] = spamTracker[key].filter(t => now - t < 5000); // 5s window
-  spamTracker[key].push(now);
-  return spamTracker[key].length >= limit;
+  if (!spamMap[key]) spamMap[key] = [];
+  // Keep only messages in last 5 seconds
+  spamMap[key] = spamMap[key].filter(t => now - t < 5000);
+  spamMap[key].push(now);
+  return spamMap[key].length >= limit;
 }
 
-// ── groupFilter — called on every group message from main.js ─────────
+// ── Send and delete helper ────────────────────────────────────────────
+async function deleteMsg(sock, m) {
+  try { await sock.sendMessage(m.chat, { delete: m.key }); } catch (_) {}
+}
+
+async function warn(sock, m, sender, count) {
+  await sock.sendMessage(m.chat, {
+    text: `@${sender.split('@')[0]} _warning ${count}/${WARN_LIMIT}_`,
+    mentions: [sender]
+  }).catch(() => {});
+}
+
+async function kick(sock, m, sender, reason) {
+  try { await sock.groupParticipantsUpdate(m.chat, [sender], 'remove'); } catch (_) {}
+  await sock.sendMessage(m.chat, {
+    text: `@${sender.split('@')[0]} _${reason}_`,
+    mentions: [sender]
+  }).catch(() => {});
+}
+
+// ── groupFilter — wired into main.js, fires on every group message ────
 const groupFilter = async (sock, m, ctx) => {
+  // Must be a group message
   if (!m.isGroup) return;
-  if (!m.body && !m.message?.stickerMessage) return;
 
   const sender = m.sender || '';
   if (!sender) return;
+
+  // Never act on owner
   if (ctx.isOwner) return;
 
+  // Live admin check — skip group admins too
   const { isSenderAdmin, isBotAdmin } = await isAdminHelper(sock, m.chat, sender);
   if (isSenderAdmin) return;
 
-  const body = m.body || '';
+  const body     = m.body || '';
+  const mentions = m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
 
-  // ── ANTISPAM ──────────────────────────────────────────────────
+  // ── 1. ANTISPAM ────────────────────────────────────────────────
   const spamCfg = getAntispam(m.chat);
   if (spamCfg?.enabled && body) {
-    const limit = spamCfg.limit || 5;
-    const isSpam = trackSpam(m.chat, sender, limit);
-
-    if (isSpam && isBotAdmin) {
-      try { await sock.sendMessage(m.chat, { delete: m.key }); } catch (_) {}
+    if (isSpamming(m.chat, sender, spamCfg.limit || 5)) {
+      if (!isBotAdmin) return;
+      await deleteMsg(sock, m);
       await sock.sendMessage(m.chat, {
         text: `@${sender.split('@')[0]} _stop spamming_`,
         mentions: [sender]
       }).catch(() => {});
-      return;
+      return; // stop further checks for this message
     }
   }
 
-  // ── ANTILINK ──────────────────────────────────────────────────
+  // ── 2. ANTILINK ────────────────────────────────────────────────
   const linkCfg = getAntilink(m.chat);
   if (linkCfg?.enabled && body && containsLink(body)) {
     if (!isBotAdmin) return;
-
-    try { await sock.sendMessage(m.chat, { delete: m.key }); } catch (_) {}
+    await deleteMsg(sock, m);
 
     if (linkCfg.action === 'kick') {
-      try { await sock.groupParticipantsUpdate(m.chat, [sender], 'remove'); } catch (_) {}
-      await sock.sendMessage(m.chat, {
-        text: `@${sender.split('@')[0]} _removed for sending a link_`,
-        mentions: [sender]
-      }).catch(() => {});
+      await kick(sock, m, sender, 'removed for sending a link');
 
     } else if (linkCfg.action === 'warn') {
       const count = incrementWarning(m.chat, sender);
       if (count >= WARN_LIMIT) {
         resetWarning(m.chat, sender);
-        try { await sock.groupParticipantsUpdate(m.chat, [sender], 'remove'); } catch (_) {}
-        await sock.sendMessage(m.chat, {
-          text: `@${sender.split('@')[0]} _removed after ${WARN_LIMIT} warnings_`,
-          mentions: [sender]
-        }).catch(() => {});
+        await kick(sock, m, sender, `removed after ${WARN_LIMIT} warnings`);
       } else {
+        await warn(sock, m, sender, count);
         await sock.sendMessage(m.chat, {
-          text: `@${sender.split('@')[0]} _warning ${count}/${WARN_LIMIT} - links not allowed_`,
+          text: `@${sender.split('@')[0]} _links are not allowed_`,
           mentions: [sender]
         }).catch(() => {});
       }
@@ -147,43 +188,64 @@ const groupFilter = async (sock, m, ctx) => {
     return;
   }
 
-  // ── ANTIBADWORD ───────────────────────────────────────────────
+  // ── 3. ANTIBADWORD ─────────────────────────────────────────────
   const bwCfg = getAntibadword(m.chat);
   if (bwCfg?.enabled && body) {
-    if (!isBotAdmin) return;
-
     const customWords = getBadwords(m.chat);
     const found = hasBadWord(body, customWords);
-    if (!found) return;
+    if (found) {
+      if (!isBotAdmin) return;
+      await deleteMsg(sock, m);
 
-    try { await sock.sendMessage(m.chat, { delete: m.key }); } catch (_) {}
+      if (bwCfg.action === 'kick') {
+        await kick(sock, m, sender, 'removed for using bad words');
 
-    if (bwCfg.action === 'kick') {
-      try { await sock.groupParticipantsUpdate(m.chat, [sender], 'remove'); } catch (_) {}
-      await sock.sendMessage(m.chat, {
-        text: `@${sender.split('@')[0]} _removed for using bad words_`,
-        mentions: [sender]
-      }).catch(() => {});
+      } else if (bwCfg.action === 'warn') {
+        const count = incrementWarning(m.chat, sender);
+        if (count >= WARN_LIMIT) {
+          resetWarning(m.chat, sender);
+          await kick(sock, m, sender, `removed after ${WARN_LIMIT} warnings`);
+        } else {
+          await warn(sock, m, sender, count);
+          await sock.sendMessage(m.chat, {
+            text: `@${sender.split('@')[0]} _bad words are not allowed_`,
+            mentions: [sender]
+          }).catch(() => {});
+        }
 
-    } else if (bwCfg.action === 'warn') {
-      const count = incrementWarning(m.chat, sender);
-      if (count >= WARN_LIMIT) {
-        resetWarning(m.chat, sender);
-        try { await sock.groupParticipantsUpdate(m.chat, [sender], 'remove'); } catch (_) {}
-        await sock.sendMessage(m.chat, {
-          text: `@${sender.split('@')[0]} _removed after ${WARN_LIMIT} warnings_`,
-          mentions: [sender]
-        }).catch(() => {});
       } else {
         await sock.sendMessage(m.chat, {
-          text: `@${sender.split('@')[0]} _warning ${count}/${WARN_LIMIT} - bad words not allowed_`,
+          text: `@${sender.split('@')[0]} _bad words are not allowed here_`,
           mentions: [sender]
         }).catch(() => {});
       }
+      return;
+    }
+  }
 
+  // ── 4. ANTITAG ─────────────────────────────────────────────────
+  const tagCfg = getAntitag(m.chat);
+  if (tagCfg?.enabled && containsMassTag(body, mentions)) {
+    if (!isBotAdmin) return;
+    await deleteMsg(sock, m);
+
+    if (tagCfg.action === 'kick') {
+      await kick(sock, m, sender, 'removed for mass tagging');
+    } else if (tagCfg.action === 'warn') {
+      const count = incrementWarning(m.chat, sender);
+      if (count >= WARN_LIMIT) {
+        resetWarning(m.chat, sender);
+        await kick(sock, m, sender, `removed after ${WARN_LIMIT} warnings`);
+      } else {
+        await warn(sock, m, sender, count);
+        await sock.sendMessage(m.chat, {
+          text: `@${sender.split('@')[0]} _mass tagging is not allowed_`,
+          mentions: [sender]
+        }).catch(() => {});
+      }
     } else {
       await sock.sendMessage(m.chat, {
-        text: `@${sender.split('@')[0]} _bad words are not allowed here_`,
+        text: `@${sender.split('@')[0]} _mass tagging is not allowed here_`,
         mentions: [sender]
       }).catch(() => {});
     }
@@ -192,16 +254,15 @@ const groupFilter = async (sock, m, ctx) => {
 
 // ── Commands ──────────────────────────────────────────────────────────
 module.exports = {
-  command: ['antilink', 'antibadword', 'antispam'],
+  command: ['antilink', 'antibadword', 'antispam', 'antitag'],
   category: 'group',
   group: true,
-  desc: 'Group protection — antilink, antibadword, antispam',
+  desc: 'Group protection — antilink, antibadword, antispam, antitag',
 
-  groupFilter,
+  groupFilter, // wired by main.js
 
   async execute(sock, m, ctx) {
     const { command, args, reply, isOwner, prefix } = ctx;
-
     if (!m.isGroup) return reply('_group only command_');
 
     const { isSenderAdmin } = await isAdminHelper(sock, m.chat, m.sender);
@@ -209,10 +270,9 @@ module.exports = {
 
     const sub = args[0]?.toLowerCase();
 
-    // ── ANTILINK ────────────────────────────────────────────────
+    // ── .antilink ────────────────────────────────────────────────
     if (command === 'antilink') {
       const cfg = getAntilink(m.chat);
-
       if (!sub) return reply(
         `_antilink: ${cfg?.enabled ? 'on' : 'off'}_\n` +
         `_action: ${cfg?.action || 'not set'}_\n\n` +
@@ -222,34 +282,21 @@ module.exports = {
         `_${prefix}antilink set warn_\n` +
         `_${prefix}antilink set kick_`
       );
-
-      if (sub === 'on') {
-        if (cfg?.enabled) return reply('_antilink already on_');
-        setAntilink(m.chat, true, cfg?.action || 'delete');
-        return reply('_antilink on_');
-      }
-
-      if (sub === 'off') {
-        removeAntilink(m.chat);
-        return reply('_antilink off_');
-      }
-
+      if (sub === 'on')  { setAntilink(m.chat, true, cfg?.action || 'delete'); return reply('_antilink on_'); }
+      if (sub === 'off') { removeAntilink(m.chat); return reply('_antilink off_'); }
       if (sub === 'set') {
         const action = args[1]?.toLowerCase();
-        if (!action || !['delete','warn','kick'].includes(action))
-          return reply('_options: delete | warn | kick_');
+        if (!['delete','warn','kick'].includes(action)) return reply('_options: delete | warn | kick_');
         setAntilink(m.chat, true, action);
         return reply(`_antilink on - action: ${action}_`);
       }
-
       return reply('_options: on | off | set delete|warn|kick_');
     }
 
-    // ── ANTIBADWORD ─────────────────────────────────────────────
+    // ── .antibadword ─────────────────────────────────────────────
     if (command === 'antibadword') {
       const cfg   = getAntibadword(m.chat);
       const words = getBadwords(m.chat);
-
       if (!sub) return reply(
         `_antibadword: ${cfg?.enabled ? 'on' : 'off'}_\n` +
         `_action: ${cfg?.action || 'not set'}_\n` +
@@ -261,84 +308,74 @@ module.exports = {
         `_${prefix}antibadword remove <word>_\n` +
         `_${prefix}antibadword list_`
       );
-
-      if (sub === 'on') {
-        if (cfg?.enabled) return reply('_antibadword already on_');
-        setAntibadword(m.chat, true, cfg?.action || 'delete');
-        return reply('_antibadword on_');
-      }
-
-      if (sub === 'off') {
-        removeAntibadword(m.chat);
-        return reply('_antibadword off_');
-      }
-
+      if (sub === 'on')  { setAntibadword(m.chat, true, cfg?.action || 'delete'); return reply('_antibadword on_'); }
+      if (sub === 'off') { removeAntibadword(m.chat); return reply('_antibadword off_'); }
       if (sub === 'set') {
         const action = args[1]?.toLowerCase();
-        if (!action || !['delete','warn','kick'].includes(action))
-          return reply('_options: delete | warn | kick_');
+        if (!['delete','warn','kick'].includes(action)) return reply('_options: delete | warn | kick_');
         setAntibadword(m.chat, true, action);
         return reply(`_antibadword on - action: ${action}_`);
       }
-
       if (sub === 'add') {
         const word = args.slice(1).join(' ').trim().toLowerCase();
         if (!word) return reply(`_usage: ${prefix}antibadword add <word>_`);
-        const added = addBadword(m.chat, word);
-        return reply(added ? `_added: ${word}_` : `_${word} already in list_`);
+        return reply(addBadword(m.chat, word) ? `_added: ${word}_` : `_already in list: ${word}_`);
       }
-
       if (sub === 'remove') {
         const word = args.slice(1).join(' ').trim().toLowerCase();
         if (!word) return reply(`_usage: ${prefix}antibadword remove <word>_`);
-        const removed = removeBadword(m.chat, word);
-        return reply(removed ? `_removed: ${word}_` : `_${word} not found_`);
+        return reply(removeBadword(m.chat, word) ? `_removed: ${word}_` : `_not found: ${word}_`);
       }
-
       if (sub === 'list') {
         const list = getBadwords(m.chat);
-        return reply(
-          list.length
-            ? `_custom banned words:_\n${list.map((w, i) => `_${i + 1}. ${w}_`).join('\n')}`
-            : '_no custom words - built-in list is active_'
+        return reply(list.length
+          ? `_custom banned words_\n${list.map((w, i) => `_${i + 1}. ${w}_`).join('\n')}`
+          : '_no custom words set - built-in list is active_'
         );
       }
-
       return reply('_options: on | off | set | add | remove | list_');
     }
 
-    // ── ANTISPAM ────────────────────────────────────────────────
+    // ── .antispam ────────────────────────────────────────────────
     if (command === 'antispam') {
       const cfg = getAntispam(m.chat);
-
       if (!sub) return reply(
         `_antispam: ${cfg?.enabled ? 'on' : 'off'}_\n` +
-        `_limit: ${cfg?.limit || 5} msgs per 5s_\n\n` +
+        `_limit: ${cfg?.limit || 5} messages per 5s_\n\n` +
         `_${prefix}antispam on_\n` +
         `_${prefix}antispam off_\n` +
-        `_${prefix}antispam set <number>_`
+        `_${prefix}antispam set <2-20>_`
       );
-
-      if (sub === 'on') {
-        if (cfg?.enabled) return reply('_antispam already on_');
-        setAntispam(m.chat, true, cfg?.limit || 5);
-        return reply('_antispam on - limit: 5 messages per 5 seconds_');
-      }
-
-      if (sub === 'off') {
-        removeAntispam(m.chat);
-        return reply('_antispam off_');
-      }
-
+      if (sub === 'on')  { setAntispam(m.chat, true, cfg?.limit || 5); return reply('_antispam on_'); }
+      if (sub === 'off') { removeAntispam(m.chat); return reply('_antispam off_'); }
       if (sub === 'set') {
         const num = parseInt(args[1]);
-        if (!num || num < 2 || num > 20)
-          return reply('_set a number between 2 and 20_');
+        if (!num || num < 2 || num > 20) return reply('_set a number between 2 and 20_');
         setAntispam(m.chat, true, num);
-        return reply(`_antispam on - limit: ${num} messages per 5 seconds_`);
+        return reply(`_antispam on - limit: ${num} per 5 seconds_`);
       }
-
       return reply('_options: on | off | set <number>_');
+    }
+
+    // ── .antitag ─────────────────────────────────────────────────
+    if (command === 'antitag') {
+      const cfg = getAntitag(m.chat);
+      if (!sub) return reply(
+        `_antitag: ${cfg?.enabled ? 'on' : 'off'}_\n` +
+        `_action: ${cfg?.action || 'not set'}_\n\n` +
+        `_${prefix}antitag on_\n` +
+        `_${prefix}antitag off_\n` +
+        `_${prefix}antitag set delete|warn|kick_`
+      );
+      if (sub === 'on')  { setAntitag(m.chat, true, cfg?.action || 'delete'); return reply('_antitag on_'); }
+      if (sub === 'off') { removeAntitag(m.chat); return reply('_antitag off_'); }
+      if (sub === 'set') {
+        const action = args[1]?.toLowerCase();
+        if (!['delete','warn','kick'].includes(action)) return reply('_options: delete | warn | kick_');
+        setAntitag(m.chat, true, action);
+        return reply(`_antitag on - action: ${action}_`);
+      }
+      return reply('_options: on | off | set delete|warn|kick_');
     }
   }
 };
