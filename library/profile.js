@@ -1,21 +1,24 @@
 /**
  * library/profile.js
- * Helper to update profile picture in full size without square crop.
+ * Compatible with Jimp v1.x (new API)
  */
 
 'use strict';
 
-const Jimp = require('jimp');
+const { Jimp, JimpMime } = require('jimp');
 
 async function generateProfilePicture(buffer) {
-  const jimp = await Jimp.read(buffer);
-  const min  = jimp.getWidth();
-  const max  = jimp.getHeight();
-  const cropped = jimp.crop(0, 0, min, max);
-  return {
-    img:     await cropped.scaleToFit(324, 720).getBufferAsync(Jimp.MIME_JPEG),
-    preview: await cropped.normalize().getBufferAsync(Jimp.MIME_JPEG)
-  };
+  const jimp = await Jimp.fromBuffer(buffer);
+
+  const w = jimp.width;
+  const h = jimp.height;
+
+  // Scale to fit 324x720 keeping aspect ratio — no crop
+  jimp.scaleToFit({ w: 324, h: 720 });
+
+  const img = await jimp.getBuffer(JimpMime.jpeg);
+
+  return { img, preview: img };
 }
 
 async function updatefullpp(jid, buffer, sock) {
