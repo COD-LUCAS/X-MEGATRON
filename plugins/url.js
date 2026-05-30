@@ -1,3 +1,8 @@
+/**
+ * url.js — plugins/url.js
+ * Command: .url (reply to image/video/audio)
+ * Uploads media to a free host — no API key needed.
+ */
 
 'use strict';
 
@@ -6,61 +11,113 @@ const path     = require('path');
 const axios    = require('axios');
 const FormData = require('form-data');
 
-const TMP = path.join(__dirname, '..', 'database', 'tmp');
-if (!fs.existsSync(TMP)) fs.mkdirSync(TMP, { recursive: true });
+const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
+if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-const react = async (sock, m, e) => {
-  try { await sock.sendMessage(m.chat, { react: { text: e, key: m.key } }); } catch (_) {}
-};
-
-module.exports = {
-  command: ['url', 'upload', 'tourl'],
-  category: 'tools',
-  desc: 'Upload media to Catbox and get URL',
-  usage: '.url (reply to image/video/audio/document)',
-
-  async execute(sock, m, context) {
-    const { reply } = context;
-
-    if (!m.quoted) return reply('_Reply to an image, video, audio, or document_');
-
-    const mtype = m.quoted.mtype || '';
-    if (!mtype.includes('image') && !mtype.includes('video') && !mtype.includes('audio') && !mtype.includes('document')) {
-      return reply('_Reply to an image, video, audio, or document_');
-    }
-
-    await react(sock, m, '⏳');
-
-    const ext      = mtype.includes('image') ? 'jpg' : mtype.includes('video') ? 'mp4' : mtype.includes('audio') ? 'mp3' : 'bin';
-    const tmpFile  = path.join(TMP, `${Date.now()}.${ext}`);
-
-    try {
-      const buf = await m.quoted.download();
-      if (!buf?.length) { await react(sock, m, '❌'); return reply('_Download failed_'); }
-
-      fs.writeFileSync(tmpFile, buf);
-
+// ── Free upload hosts (tried in order until one works) ─────────────────
+const UPLOAD_HOSTS = [
+  {
+    name: 'ar-hosting',
+    upload: async (buffer, mime, filename) => {
       const form = new FormData();
-      form.append('reqtype', 'fileupload');
-      form.append('fileToUpload', fs.createReadStream(tmpFile));
-
-      const res = await axios.post('https://catbox.moe/user/api.php', form, {
-        headers: form.getHeaders(),
-        timeout: 60000,
+      form.append('file', buffer, { filename, contentType: mime });
+      const res = await axios.post('https://ar-hosting.pages.dev/upload', form, {
+        headers: { ...form.getHeaders() },
+        timeout: 30000,
+        maxBodyLength: Infinity
       });
-
-      try { fs.unlinkSync(tmpFile); } catch (_) {}
-
-      const url = (res.data || '').trim();
-      if (!url.includes('catbox.moe')) { await react(sock, m, '❌'); return reply('_Upload failed_'); }
-
-      await react(sock, m, '✅');
-      return reply(url);
-
-    } catch (e) {
-      try { fs.unlinkSync(tmpFile); } catch (_) {}
-      await react(sock, m, '❌');
-      return reply(`_Failed: ${e.message}_`);
+      return res.data?.url || res.data?.data || null;
     }
   },
+  {
+    name: 'telegra.ph',
+    upload: async (buffer, mime, filename) => {
+      const form = new FormData();
+      form.append('file', buffer, { filename, contentType: mime });
+      const res = await axios.post('https://telegra.ph/upload', form, {
+        headers: { ...form.getHeaders() },
+        timeout: 30000,
+        maxBodyLength: Infinity
+      });
+      const data = res.data;
+      if (Array.isArray(data) && data[0]?.src) return `https://telegra.ph${data[0].src}`;
+      return null;
+    }
+  },
+  {
+    name: 'tmpfiles',
+    upload: async (buffer, mime, filename) => {
+      const form = new FormData();
+      form.append('file', buffer, { filename, contentType: mime });
+      const res = await axios.post('https://tmpfiles.org/api/v1/upload', form, {
+        headers: { ...form.getHeaders() },
+        timeout: 30000,
+        maxBodyLength: Infinity
+      });
+      return res.data?.data?.url?.replace('tmpfiles.org/', 'tmpfiles.org/dl/') || null;
+    }
+  }
+];
+
+async function uploadBuffer(buffer, mime, filename) {
+  for (const host of UPLOAD_HOSTS) {
+    try {
+      const url = await host.upload(buffer, mime, filename);
+      if (url) return url;
+    } catch (e) {
+      console.error(`[url] ${host.name} failed:`, e.message);
+    }
+  }
+  throw new Error('all upload hosts failed');
+}
+
+function getMimeAndExt(mtype, msg) {
+  if (mtype === 'imageMessage')    return { mime: 'image/jpeg',  ext: 'jpg'  };
+  if (mtype === 'videoMessage')    return { mime: 'video/mp4',   ext: 'mp4'  };
+  if (mtype === 'stickerMessage')  return { mime: 'image/webp',  ext: 'webp' };
+  if (mtype === 'documentMessage') {
+    const mt = msg?.documentMessage?.mimetype || 'application/octet-stream';
+    const fn = msg?.documentMessage?.fileName || 'file';
+    const ex = fn.includes('.') ? fn.split('.').pop() : 'bin';
+    return { mime: mt, ext: ex };
+  }
+  if (mtype === 'audioMessage') {
+    const mt = msg?.audioMessage?.mimetype || 'audio/mpeg';
+    return { mime: mt, ext: mt.includes('ogg') ? 'ogg' : 'mp3' };
+  }
+  return { mime: 'application/octet-stream', ext: 'bin' };
+}
+
+module.exports = {
+  command:  ['url'],
+  category: 'media',
+  desc:     'Upload media and get a URL — no API key needed',
+  usage:    '.url (reply to any media)',
+
+  async execute(sock, m, ctx) {
+    const { reply } = ctx;
+
+    if (!m.quoted) return reply('_reply to an image, video, audio or document_');
+
+    const mtype = m.quoted.mtype;
+    const supported = ['imageMessage','videoMessage','audioMessage','stickerMessage','documentMessage'];
+    if (!supported.includes(mtype)) return reply('_reply to an image, video, audio or document_');
+
+    await reply('_uploading_');
+
+    try {
+      const buffer = await m.quoted.download().catch(() => null);
+      if (!buffer || buffer.length === 0) return reply('_failed to download media_');
+
+      const { mime, ext } = getMimeAndExt(mtype, m.quoted.message);
+      const filename = `upload_${Date.now()}.${ext}`;
+
+      const url = await uploadBuffer(buffer, mime, filename);
+      return reply(`_${url}_`);
+
+    } catch (err) {
+      console.error('url error:', err.message);
+      return reply('_failed to upload - all hosts unavailable_');
+    }
+  }
 };
