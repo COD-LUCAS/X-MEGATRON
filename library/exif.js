@@ -88,7 +88,7 @@ async function writeExifImg(media, metadata) {
     const img = new webp.Image();
     const json = {
       "sticker-pack-id": `https://github.com/COD-LUCAS/x-megatron`,
-      "sticker-pack-name": metadata.packname || 'X MEGATRON',
+      "sticker-pack-name": metadata.packname || '𐍇 - 𐌼𐌴𐌾𐌰𐍄𐍂𐍈𐍀',
       "sticker-pack-publisher": metadata.author || 'COD-LUCAS',
       "emojis": metadata.categories ? metadata.categories : [""]
     };
@@ -144,7 +144,7 @@ async function writeExif(media, metadata) {
     const img = new webp.Image();
     const json = {
       "sticker-pack-id": `https://github.com/COD-LUCAS/x-megatron`,
-      "sticker-pack-name": metadata.packname || 'X MEGATRON',
+      "sticker-pack-name": metadata.packname || '𐍇 - 𐌼𐌴𐌾𐌰𐍄𐍂𐍈𐍀',
       "sticker-pack-publisher": metadata.author || 'COD-LUCAS',
       "emojis": metadata.categories ? metadata.categories : [""]
     };
