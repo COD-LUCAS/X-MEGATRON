@@ -1,14 +1,3 @@
-/**
- * fancycheck.js — plugins/fancycheck.js
- * Commands: .sort .onwa .offwa
- *
- * .sort  — find fancy numbers from a txt file (reply to doc)
- * .onwa  — find registered WhatsApp numbers from a txt file
- * .offwa — find unregistered WhatsApp numbers from a txt file
- *
- * After each command reply with a number to set how many to process.
- */
-
 'use strict';
 
 const fs   = require('fs');
@@ -17,11 +6,9 @@ const path = require('path');
 const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// ── Per-sender pending state ──────────────────────────────────────────
-const pendingSort   = {};
+const pendingSort    = {};
 const pendingWACheck = {};
 
-// ── Helpers ───────────────────────────────────────────────────────────
 function extractNumbers(text) {
   const nums = [];
   for (const line of text.split(/\r?\n/)) {
@@ -82,7 +69,6 @@ async function sendFile(sock, m, filename, content, caption) {
   }
 }
 
-// ── handleText: fires on number replies after .sort / .onwa / .offwa ──
 async function handleText(sock, m, ctx) {
   if (!ctx.isOwner) return;
 
@@ -92,13 +78,12 @@ async function handleText(sock, m, ctx) {
 
   const sender = m.sender;
 
-  // ── SORT pending ────────────────────────────────────────────────
   if (pendingSort[sender]) {
     const data = pendingSort[sender];
     delete pendingSort[sender];
 
-    const total   = data.numbers.length;
-    const sent    = await sock.sendMessage(m.chat, { text: '_processing 0%_' }, { quoted: m });
+    const total      = data.numbers.length;
+    const sent       = await sock.sendMessage(m.chat, { text: '_processing 0%_' }, { quoted: m });
     const thresholds = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
     let tIdx = 0;
 
@@ -130,11 +115,11 @@ async function handleText(sock, m, ctx) {
 
     fancy.sort((a, b) => b.score - a.score);
 
-    const display  = Math.min(count, fancy.length);
-    const topNums  = fancy.slice(0, display);
-    let result     = `_fancy numbers found_\n\n_total checked: ${total}_\n_fancy found: ${fancy.length}_\n\n_top ${display}:_\n\`\`\`\n`;
-    result        += topNums.map(x => fmt(x.number)).join('\n');
-    result        += '\n```';
+    const display = Math.min(count, fancy.length);
+    const topNums = fancy.slice(0, display);
+    let result    = `_fancy numbers found_\n\n_total checked: ${total}_\n_fancy found: ${fancy.length}_\n\n_top ${display}:_\n\`\`\`\n`;
+    result       += topNums.map(x => fmt(x.number)).join('\n');
+    result       += '\n```';
 
     if (fancy.length > display) result += `\n\n_${fancy.length - display} more will be sent as file_`;
 
@@ -153,7 +138,6 @@ async function handleText(sock, m, ctx) {
     return;
   }
 
-  // ── WA CHECK pending ────────────────────────────────────────────
   if (pendingWACheck[sender]) {
     const data       = pendingWACheck[sender];
     delete pendingWACheck[sender];
@@ -199,7 +183,6 @@ async function handleText(sock, m, ctx) {
 
     await editMsg(sock, m.chat, sent.key, '_check complete_');
 
-    const emoji = data.type === 'registered' ? '✅' : '❌';
     const title = data.type === 'registered' ? 'registered' : 'unregistered';
 
     if (results.length === 0) {
@@ -208,10 +191,10 @@ async function handleText(sock, m, ctx) {
       }, { quoted: m });
     }
 
-    const show  = Math.min(50, results.length);
-    let reply   = `_${title} numbers_\n\n_checked: ${checkCount}_\n_${title}: ${results.length}_\n\n_top ${show}:_\n\`\`\`\n`;
-    reply      += results.slice(0, show).map(fmt).join('\n');
-    reply      += '\n```';
+    const show = Math.min(50, results.length);
+    let reply  = `_${title} numbers_\n\n_checked: ${checkCount}_\n_${title}: ${results.length}_\n\n_top ${show}:_\n\`\`\`\n`;
+    reply     += results.slice(0, show).map(fmt).join('\n');
+    reply     += '\n```';
     if (results.length > show) reply += `\n\n_${results.length - show} more will be sent as file_`;
     if (unchecked.length > 0)  reply += `\n\n_${unchecked.length} numbers not checked to avoid ban_`;
 
@@ -233,7 +216,6 @@ async function handleText(sock, m, ctx) {
   }
 }
 
-// ── Plugin export ─────────────────────────────────────────────────────
 module.exports = {
   command:  ['sort', 'onwa', 'offwa'],
   category: 'utility',
@@ -245,7 +227,6 @@ module.exports = {
   async execute(sock, m, ctx) {
     const { command, reply } = ctx;
 
-    // ── .sort ────────────────────────────────────────────────────
     if (command === 'sort') {
       if (!m.quoted || m.quoted.mtype !== 'documentMessage')
         return reply('_reply to a text file containing numbers_');
@@ -268,7 +249,6 @@ module.exports = {
 
       pendingSort[m.sender] = { numbers, filePath };
 
-      // Auto-clear after 5 min
       setTimeout(() => {
         if (pendingSort[m.sender]) {
           try { if (fs.existsSync(pendingSort[m.sender].filePath)) fs.unlinkSync(pendingSort[m.sender].filePath); } catch (_) {}
@@ -283,7 +263,6 @@ module.exports = {
       );
     }
 
-    // ── .onwa / .offwa ───────────────────────────────────────────
     if (command === 'onwa' || command === 'offwa') {
       const type = command === 'onwa' ? 'registered' : 'unregistered';
       let numbers = [];
@@ -292,8 +271,18 @@ module.exports = {
         const buf = await m.quoted.download().catch(() => null);
         if (!buf) return reply('_failed to download file_');
         numbers = extractNumbers(buf.toString('utf8'));
-      } else if (m.quoted?.body || m.quoted?.text) {
-        numbers = extractNumbers(m.quoted.body || m.quoted.text || '');
+      } else {
+        const quotedText =
+          m.quoted?.body                                      ||
+          m.quoted?.text                                      ||
+          m.quoted?.caption                                   ||
+          m.quoted?.conversation                              ||
+          m.quoted?.message?.conversation                     ||
+          m.quoted?.message?.extendedTextMessage?.text        ||
+          m.quoted?.message?.imageMessage?.caption            ||
+          '';
+
+        if (quotedText) numbers = extractNumbers(quotedText);
       }
 
       if (numbers.length === 0)
@@ -313,4 +302,3 @@ module.exports = {
     }
   }
 };
-
