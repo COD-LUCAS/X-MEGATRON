@@ -1,46 +1,50 @@
-'use strict';
 
 const fs = require('fs');
 const { exec } = require('child_process');
 const path = require('path');
 
-const TMP_DIR = path.join(__dirname, '..', 'database', 'tmp');
-if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+const getRandom = (ext) => {
+  return path.join(__dirname, '..', 'temp', `${Date.now()}${ext}`);
+};
 
-const getTempPath = (ext) => path.join(TMP_DIR, `${Date.now()}${ext}`);
-const cleanTemp = (file) => {
-  try { if (file && fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
+const ensureTempDir = () => {
+  const tempDir = path.join(__dirname, '..', 'temp');
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
 };
 
 module.exports = {
   command: ['photo', 'video'],
   category: 'converter',
   desc: 'Convert stickers to photo/video',
-  usage: '.photo (reply to non-animated sticker) | .video (reply to animated sticker)',
+  usage: '.photo (reply to sticker) / .video (reply to animated sticker)',
 
   async execute(sock, m, context) {
-    const { command, reply, react } = context;
+    const { command } = context;
+
+    ensureTempDir();
 
     if (command === 'photo') {
       if (!m.quoted || m.quoted.mtype !== 'stickerMessage') {
-        return reply('_Reply to a non-animated sticker_');
+        return m.reply('_Reply to a non-animated sticker_');
       }
 
       try {
-        await react('🔄');
+        await sock.sendMessage(m.chat, { react: { text: '🔄', key: m.key } });
 
         const media = await m.quoted.download();
-        const inputPath = getTempPath('.webp');
-        const outputPath = getTempPath('.png');
+        const inputPath = getRandom('.webp');
+        const outputPath = getRandom('.png');
 
         fs.writeFileSync(inputPath, media);
 
         exec(`ffmpeg -i "${inputPath}" "${outputPath}"`, async (err) => {
           try {
             if (err) {
-              cleanTemp(inputPath);
-              await react('❌');
-              return reply('_Conversion failed_');
+              fs.unlinkSync(inputPath);
+              await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
+              return m.reply('_Conversion failed_');
             }
 
             const buffer = fs.readFileSync(outputPath);
@@ -49,34 +53,32 @@ module.exports = {
               image: buffer
             }, { quoted: m });
 
-            await react('✅');
+            await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
 
-            cleanTemp(inputPath);
-            cleanTemp(outputPath);
+            fs.unlinkSync(inputPath);
+            fs.unlinkSync(outputPath);
           } catch (e) {
-            await react('❌');
-            cleanTemp(inputPath);
-            cleanTemp(outputPath);
+            await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
           }
         });
 
       } catch (e) {
-        await react('❌');
-        return reply('_Failed to convert_');
+        await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
+        return m.reply('_Failed to convert_');
       }
     }
 
     if (command === 'video') {
       if (!m.quoted || m.quoted.mtype !== 'stickerMessage') {
-        return reply('_Reply to an animated sticker_');
+        return m.reply('_Reply to an animated sticker_');
       }
 
       try {
-        await react('🔄');
+        await sock.sendMessage(m.chat, { react: { text: '🔄', key: m.key } });
 
         const media = await m.quoted.download();
-        const inputPath = getTempPath('.webp');
-        const outputPath = getTempPath('.mp4');
+        const inputPath = getRandom('.webp');
+        const outputPath = getRandom('.mp4');
 
         fs.writeFileSync(inputPath, media);
 
@@ -85,9 +87,9 @@ module.exports = {
             exec(`ffmpeg -i "${inputPath}" -c:v libx264 -preset ultrafast "${outputPath}"`, async (err2) => {
               try {
                 if (err2) {
-                  cleanTemp(inputPath);
-                  await react('❌');
-                  return reply('_Conversion failed_');
+                  fs.unlinkSync(inputPath);
+                  await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
+                  return m.reply('_Conversion failed_');
                 }
 
                 const buffer = fs.readFileSync(outputPath);
@@ -97,14 +99,12 @@ module.exports = {
                   gifPlayback: true
                 }, { quoted: m });
 
-                await react('✅');
+                await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
 
-                cleanTemp(inputPath);
-                cleanTemp(outputPath);
+                fs.unlinkSync(inputPath);
+                fs.unlinkSync(outputPath);
               } catch (e) {
-                await react('❌');
-                cleanTemp(inputPath);
-                cleanTemp(outputPath);
+                await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
               }
             });
           } else {
@@ -116,21 +116,19 @@ module.exports = {
                 gifPlayback: true
               }, { quoted: m });
 
-              await react('✅');
+              await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
 
-              cleanTemp(inputPath);
-              cleanTemp(outputPath);
+              fs.unlinkSync(inputPath);
+              fs.unlinkSync(outputPath);
             } catch (e) {
-              await react('❌');
-              cleanTemp(inputPath);
-              cleanTemp(outputPath);
+              await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
             }
           }
         });
 
       } catch (e) {
-        await react('❌');
-        return reply('_Failed to convert_');
+        await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } });
+        return m.reply('_Failed to convert_');
       }
     }
   }
