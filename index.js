@@ -272,13 +272,15 @@ const start = async () => {
 
         if (gsDb[id]?.pdm) {
           for (const jid of participants) {
-            const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
-            const mentionList = [jidStr];
-            if (author) mentionList.push(author);
+            const jidStr  = typeof jid === 'string' ? jid : (jid.id || String(jid));
+            const byStr   = author || '';
+            const mentions = [jidStr];
+            if (byStr) mentions.push(byStr);
+            const byText  = byStr ? ` _by_ @${byStr.split('@')[0]}` : '';
 
             await sock.sendMessage(id, {
-              text: `@${jidStr.split('@')[0]} _promoted as admin_`,
-              mentions: mentionList
+              text: `@${jidStr.split('@')[0]} _promoted as admin${byText}_`,
+              mentions
             }).catch(() => {});
           }
         }
@@ -294,13 +296,15 @@ const start = async () => {
 
         if (gsDb[id]?.pdm) {
           for (const jid of participants) {
-            const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
-            const mentionList = [jidStr];
-            if (author) mentionList.push(author);
+            const jidStr  = typeof jid === 'string' ? jid : (jid.id || String(jid));
+            const byStr   = author || '';
+            const mentions = [jidStr];
+            if (byStr) mentions.push(byStr);
+            const byText  = byStr ? ` _by_ @${byStr.split('@')[0]}` : '';
 
             await sock.sendMessage(id, {
-              text: `@${jidStr.split('@')[0]} _demoted as admin_`,
-              mentions: mentionList
+              text: `@${jidStr.split('@')[0]} _demoted as admin${byText}_`,
+              mentions
             }).catch(() => {});
           }
         }
@@ -350,6 +354,19 @@ const start = async () => {
 
     // ── FIX 1: Block BAE5 WhatsApp system-generated message IDs ──
     if (raw.key?.id?.startsWith('BAE5') && raw.key.id.length === 16) return;
+
+    // ── Block bot's own messages from re-entering handler loop ──
+    // fromMe messages in groups cause empty message spam if not gated here
+    if (raw.key.fromMe) {
+      // Only let owner-triggered commands through, skip all auto-sent bot messages
+      const selfBody = (
+        raw.message?.conversation?.trim() ||
+        raw.message?.extendedTextMessage?.text?.trim() ||
+        ''
+      );
+      // If bot sent an empty/reaction/status message, drop it entirely
+      if (!selfBody) return;
+    }
 
     // ── Antidelete: store every incoming message ──
     antidelete.storeMessage(sock, raw).catch(() => {});
