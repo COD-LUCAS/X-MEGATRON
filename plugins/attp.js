@@ -93,7 +93,7 @@ module.exports = {
       const mp4Buffer = await renderBlinkingMp4(input);
 
       webpPath = await writeExifVid(mp4Buffer, {
-        packname: 'X MEGATRON',
+        packname: '𐍇 - 𐌼𐌴𐌾𐌰𐍄𐍂𐍈𐍀',
         author:   'COD-LUCAS'
       });
 
