@@ -368,8 +368,8 @@ const start = async () => {
       if (!selfBody) return;
     }
 
-    // ── Antidelete: store every incoming message ──
-    antidelete.storeMessage(sock, raw).catch(() => {});
+    // ── Antidelete: store every incoming message (non-bot only) ──
+    if (!raw.key.fromMe) antidelete.storeMessage(sock, raw).catch(() => {});
 
     // Unwrap ephemeral
     if (raw.message.ephemeralMessage) {
@@ -394,11 +394,18 @@ const start = async () => {
       ''
     );
 
-    // Allow sticker messages through (no text body needed)
-    const isStickerMsg = !!raw.message.stickerMessage;
+    // Allow any media message through even without text body
+    // (image, video, audio, sticker, document may have no caption but still need moderation)
+    const isMediaMsg = !!(
+      raw.message.stickerMessage  ||
+      raw.message.imageMessage    ||
+      raw.message.videoMessage    ||
+      raw.message.audioMessage    ||
+      raw.message.documentMessage
+    );
 
-    // Block truly empty text messages (not stickers/media commands)
-    if (!isStickerMsg && !messageContent) return;
+    // Drop ONLY pure empty text messages with no media
+    if (!isMediaMsg && !messageContent) return;
 
     // Rate limiting & dedup (only for non-bot messages)
     if (!raw.key.fromMe) {
@@ -428,4 +435,3 @@ const start = async () => {
 };
 
 start();
-
