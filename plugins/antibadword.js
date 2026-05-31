@@ -1,117 +1,103 @@
 /**
- * library/antibadword.js
- * Antibadword helper — detection + per-group config.
- * Uses library/antifunction.js for storage.
- *
- * Standard word list only — not exhaustive.
- * Users can add/remove custom words per group.
+ * antibadword.js — plugins/antibadword.js
+ * Commands: .antibadword on/off/set/add/remove/list
+ * Groups only. Admin only.
+ * groupFilter() runs on every group message via main.js
  */
 
 'use strict';
 
+const isAdminHelper = require('../library/isAdmin');
 const {
+  handleBadwordDetection,
   setAntibadword, getAntibadword, removeAntibadword,
   addBadword, removeBadword, getBadwords,
-  incrementWarning, resetWarning,
-} = require('./antifunction');
+} = require('../library/antibadword');
 
-// ── Standard bad word list (clean, not exhaustive) ─────────────────────
-// Only universally recognized offensive words — no slang overload
-const STANDARD_WORDS = [
-  // English profanity
-  'fuck','fucker','fucking','fck','fuk','f*ck','f@ck',
-  'shit','bitch','bastard','asshole','dick','cock','cunt',
-  'pussy','prick','whore','slut','motherfucker','wanker',
-  'jackass','douchebag','retard','faggot','nigger','nigga',
-  // Hindi/Hinglish (core)
-  'madarchod','bhosdike','bsdk','bhosda','lauda','lund',
-  'chutiya','chut','randi','harami','behenchod','gandu',
-  'benchod','betichod','gaand','chodne','chudai',
-  'randi ki aulad','maa ki chut','teri maa ki',
-  // Sexual (universal)
-  'porn','xxx','blowjob','handjob','cumshot','dildo',
-  'gangbang','threesome','hentai',
-];
+// ── groupFilter — wired by main.js ────────────────────────────────────
+const groupFilter = async (sock, m, ctx) => {
+  if (!m.isGroup) return;
+  if (!m.body)    return;
+  if (ctx.isOwner) return;
 
-const WARN_LIMIT = 3;
+  const { isSenderAdmin, isBotAdmin } = await isAdminHelper(sock, m.chat, m.sender);
+  if (isSenderAdmin) return;
 
-// ── Detection ─────────────────────────────────────────────────────────
-function detectBadWord(text, customWords = []) {
-  const clean = text
-    .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  await handleBadwordDetection(sock, m, isBotAdmin);
+};
 
-  const all   = [...new Set([...STANDARD_WORDS, ...customWords.map(w => w.toLowerCase())])];
-  const words = clean.split(' ');
+// ── Plugin ────────────────────────────────────────────────────────────
+module.exports = {
+  command:  ['antibadword'],
+  category: 'group',
+  group:    true,
+  desc:     'Antibadword protection for groups',
+  usage:    '.antibadword on|off|set delete|warn|kick|add <word>|remove <word>|list',
 
-  for (const w of words) {
-    if (w.length < 2) continue;
-    if (all.includes(w)) return w;
-  }
-  for (const phrase of all) {
-    if (phrase.includes(' ') && clean.includes(phrase)) return phrase;
-  }
-  return null;
-}
+  groupFilter,
 
-// ── Handle detection (called from groupFilter) ────────────────────────
-async function handleBadwordDetection(sock, m, isBotAdmin) {
-  if (!m.isGroup || !m.body) return false;
+  async execute(sock, m, ctx) {
+    const { args, reply, isOwner, prefix } = ctx;
+    if (!m.isGroup) return reply('_group only command_');
 
-  const cfg = getAntibadword(m.chat);
-  if (!cfg?.enabled) return false;
-  if (!isBotAdmin) return false;
+    const { isSenderAdmin } = await isAdminHelper(sock, m.chat, m.sender);
+    if (!isSenderAdmin && !isOwner) return reply('_this command is for group admins only_');
 
-  const customWords = getBadwords(m.chat);
-  const found = detectBadWord(m.body, customWords);
-  if (!found) return false;
+    const cfg   = getAntibadword(m.chat);
+    const words = getBadwords(m.chat);
+    const sub   = args[0]?.toLowerCase();
 
-  const sender = m.sender || '';
+    if (!sub) return reply(
+      `_antibadword: ${cfg?.enabled ? 'on' : 'off'}_\n` +
+      `_action: ${cfg?.action || 'not set'}_\n` +
+      `_custom words: ${words.length}_\n\n` +
+      `_${prefix}antibadword on_\n` +
+      `_${prefix}antibadword off_\n` +
+      `_${prefix}antibadword set delete|warn|kick_\n` +
+      `_${prefix}antibadword add <word>_\n` +
+      `_${prefix}antibadword remove <word>_\n` +
+      `_${prefix}antibadword list_`
+    );
 
-  // Delete message
-  try { await sock.sendMessage(m.chat, { delete: m.key }); } catch (_) {}
-
-  if (cfg.action === 'kick') {
-    try { await sock.groupParticipantsUpdate(m.chat, [sender], 'remove'); } catch (_) {}
-    await sock.sendMessage(m.chat, {
-      text: `@${sender.split('@')[0]} _removed for using bad words_`,
-      mentions: [sender]
-    }).catch(() => {});
-
-  } else if (cfg.action === 'warn') {
-    const count = incrementWarning(m.chat, sender);
-    if (count >= WARN_LIMIT) {
-      resetWarning(m.chat, sender);
-      try { await sock.groupParticipantsUpdate(m.chat, [sender], 'remove'); } catch (_) {}
-      await sock.sendMessage(m.chat, {
-        text: `@${sender.split('@')[0]} _removed after ${WARN_LIMIT} warnings_`,
-        mentions: [sender]
-      }).catch(() => {});
-    } else {
-      await sock.sendMessage(m.chat, {
-        text: `@${sender.split('@')[0]} _warning ${count}/${WARN_LIMIT} - bad words not allowed_`,
-        mentions: [sender]
-      }).catch(() => {});
+    if (sub === 'on') {
+      if (cfg?.enabled) return reply('_antibadword already on_');
+      setAntibadword(m.chat, true, cfg?.action || 'delete');
+      return reply('_antibadword on_');
     }
 
-  } else {
-    // delete only
-    await sock.sendMessage(m.chat, {
-      text: `@${sender.split('@')[0]} _bad words are not allowed here_`,
-      mentions: [sender]
-    }).catch(() => {});
+    if (sub === 'off') {
+      removeAntibadword(m.chat);
+      return reply('_antibadword off_');
+    }
+
+    if (sub === 'set') {
+      const action = args[1]?.toLowerCase();
+      if (!['delete','warn','kick'].includes(action))
+        return reply('_options: delete | warn | kick_');
+      setAntibadword(m.chat, true, action);
+      return reply(`_antibadword on - action: ${action}_`);
+    }
+
+    if (sub === 'add') {
+      const word = args.slice(1).join(' ').trim().toLowerCase();
+      if (!word) return reply(`_usage: ${prefix}antibadword add <word>_`);
+      return reply(addBadword(m.chat, word) ? `_added: ${word}_` : `_already in list: ${word}_`);
+    }
+
+    if (sub === 'remove') {
+      const word = args.slice(1).join(' ').trim().toLowerCase();
+      if (!word) return reply(`_usage: ${prefix}antibadword remove <word>_`);
+      return reply(removeBadword(m.chat, word) ? `_removed: ${word}_` : `_not found: ${word}_`);
+    }
+
+    if (sub === 'list') {
+      const list = getBadwords(m.chat);
+      return reply(list.length
+        ? `_custom banned words_\n${list.map((w, i) => `_${i + 1}. ${w}_`).join('\n')}`
+        : '_no custom words set - standard list is active_'
+      );
+    }
+
+    return reply('_options: on | off | set | add | remove | list_');
   }
-
-  return true;
-}
-
-module.exports = {
-  handleBadwordDetection,
-  detectBadWord,
-  STANDARD_WORDS,
-  // re-export antifunction helpers for plugin use
-  setAntibadword, getAntibadword, removeAntibadword,
-  addBadword, removeBadword, getBadwords,
 };
