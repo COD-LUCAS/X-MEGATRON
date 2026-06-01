@@ -1,63 +1,54 @@
 require('./library/console');
 require('dotenv').config();
 
-const fs   = require('fs');
-const path = require('path');
+const fs    = require('fs');
+const path  = require('path');
 const axios = require('axios');
-const log  = require('./library/console');
+const log   = require('./library/console');
 
-process.on('uncaughtException',  (e) => log.error('UncaughtException: ' + e.message));
+process.on('uncaughtException',  (e) => log.error('UncaughtException: '  + e.message));
 process.on('unhandledRejection', (e) => log.error('UnhandledRejection: ' + (e?.message || e)));
-// ── Startup cleanup — wipe rt_ plugins and eval tmp files ──
+
+// ── Startup cleanup ──────────────────────────────────────────────────
 try {
   const extDir = path.join(__dirname, 'database', 'external_plugins');
   if (fs.existsSync(extDir)) {
-    fs.readdirSync(extDir)
-      .filter(f => f.startsWith('rt_') && f.endsWith('.js'))
+    fs.readdirSync(extDir).filter(f => f.startsWith('rt_') && f.endsWith('.js'))
       .forEach(f => { try { fs.unlinkSync(path.join(extDir, f)); } catch (_) {} });
   }
   const dbDir = path.join(__dirname, 'database');
   if (fs.existsSync(dbDir)) {
-    fs.readdirSync(dbDir)
-      .filter(f => (f.startsWith('eval_') && f.endsWith('.txt')) || (f.startsWith('eval_') && f.endsWith('.js')))
+    fs.readdirSync(dbDir).filter(f => f.startsWith('eval_') && (f.endsWith('.txt') || f.endsWith('.js')))
       .forEach(f => { try { fs.unlinkSync(path.join(dbDir, f)); } catch (_) {} });
   }
 } catch (_) {}
 
-
-// ── Temp folder redirect (prevents /tmp overflow on hosted panels) ──
+// ── Temp folder ──────────────────────────────────────────────────────
 const customTemp = path.join(process.cwd(), 'temp');
 if (!fs.existsSync(customTemp)) fs.mkdirSync(customTemp, { recursive: true });
 process.env.TMPDIR = customTemp;
 process.env.TEMP   = customTemp;
 process.env.TMP    = customTemp;
 
-// Auto-clean temp files older than 3 hours
 setInterval(() => {
   fs.readdir(customTemp, (err, files) => {
     if (err) return;
     for (const file of files) {
       const fp = path.join(customTemp, file);
       fs.stat(fp, (err, stats) => {
-        if (!err && Date.now() - stats.mtimeMs > 3 * 60 * 60 * 1000) {
-          fs.unlink(fp, () => {});
-        }
+        if (!err && Date.now() - stats.mtimeMs > 3 * 60 * 60 * 1000) fs.unlink(fp, () => {});
       });
     }
   });
-  log.info('🧹 Temp folder cleaned');
 }, 3 * 60 * 60 * 1000);
 
-// ── RAM watchdog — auto-restart above 400MB ──────────────────────────
+// ── RAM watchdog ─────────────────────────────────────────────────────
 setInterval(() => {
   const used = process.memoryUsage().rss / 1024 / 1024;
-  if (used > 400) {
-    log.warn(`⚠️ RAM usage ${used.toFixed(0)}MB > 400MB — restarting...`);
-    process.exit(1);
-  }
+  if (used > 400) { log.warn(`RAM ${used.toFixed(0)}MB > 400MB — restarting`); process.exit(1); }
 }, 30_000);
 
-// ── Silent system message types ──────────────────────────────────────
+// ── Silent message types ─────────────────────────────────────────────
 const SILENT_TYPES = new Set([
   'protocolMessage', 'senderKeyDistributionMessage', 'reactionMessage',
   'pollUpdateMessage', 'groupV2Change', 'groupNotification',
@@ -118,9 +109,8 @@ const loadBaileys = async () => {
   jidDecode                 = B.jidDecode;
 };
 
-// ── Group events DB helper ───────────────────────────────────────────
+// ── Group events DB ──────────────────────────────────────────────────
 const GROUP_EVENTS_DB = path.join(__dirname, 'database', 'group_events.json');
-
 const loadGroupEventsDB = () => {
   try {
     if (fs.existsSync(GROUP_EVENTS_DB)) return JSON.parse(fs.readFileSync(GROUP_EVENTS_DB, 'utf8'));
@@ -134,23 +124,20 @@ const start = async () => {
 
   const cfg        = require('./config');
   const sessionDir = path.join(__dirname, cfg.session || 'sessions');
-
   await initSession(sessionDir);
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version }          = await fetchLatestBaileysVersion();
-
   log.info(`Baileys ${version.join('.')}`);
 
   const sock = makeWASocket({
-    auth:              state,
-    version,
-    logger:            require('pino')({ level: 'silent' }),
+    auth: state, version,
+    logger: require('pino')({ level: 'silent' }),
     printQRInTerminal: false,
-    browser:           Browsers.macOS('Safari'),
-    getMessage:        async () => ({ conversation: '' }),
+    browser: Browsers.macOS('Safari'),
+    getMessage: async () => ({ conversation: '' }),
     generateHighQualityLinkPreview: false,
-    syncFullHistory:   false,
+    syncFullHistory: false,
   });
 
   sock.decodeJid = (jid) => {
@@ -164,12 +151,11 @@ const start = async () => {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // ── Anticall ────────────────────────────────────────────────────────
+  // ── Anticall ─────────────────────────────────────────────────────
   const antiCallNotified = new Set();
-
   sock.ev.on('call', async (calls) => {
     try {
-      const DB  = path.join(__dirname, 'database', 'group_settings.json');
+      const DB = path.join(__dirname, 'database', 'group_settings.json');
       let db = {};
       try { if (fs.existsSync(DB)) db = JSON.parse(fs.readFileSync(DB, 'utf8')); } catch (_) {}
       if (!db.__global?.anticall) return;
@@ -178,92 +164,47 @@ const start = async () => {
         const wl  = (db.__global.callWhitelist || '').split(',').filter(Boolean);
         const num = call.from?.split('@')[0] || '';
         if (wl.some(n => num.endsWith(n.replace(/\D/g, '').slice(-10)))) continue;
-
-        // reject
-        try {
-          if (typeof sock.rejectCall === 'function') {
-            await sock.rejectCall(call.id, call.from).catch(() => {});
-          }
-        } catch (_) {}
-
-        // notify only once per minute per caller
+        try { if (typeof sock.rejectCall === 'function') await sock.rejectCall(call.id, call.from).catch(() => {}); } catch (_) {}
         if (!antiCallNotified.has(call.from)) {
           antiCallNotified.add(call.from);
           setTimeout(() => antiCallNotified.delete(call.from), 60000);
-          if (db.__global.callRejectMsg) {
-            await sock.sendMessage(call.from, { text: db.__global.callRejectMsg }).catch(() => {});
-          } else {
-            await sock.sendMessage(call.from, { text: '📵 Anticall is enabled. Your call was rejected.' }).catch(() => {});
-          }
+          const msg = db.__global.callRejectMsg || '_anticall is enabled. your call was rejected_';
+          await sock.sendMessage(call.from, { text: msg }).catch(() => {});
         }
       }
     } catch (_) {}
   });
 
-  // ── Group participant events (welcome, goodbye, promote, demote) ────
+  // ── Group participant events ──────────────────────────────────────
   sock.ev.on('group-participants.update', async ({ id, participants, action, author }) => {
     try {
-      const isAdmin = require('./library/isAdmin');
       const db      = loadGroupEventsDB();
       const groupDb = db[id] || {};
 
-      // Fetch group name once for all actions
       let groupName = id;
-      try {
-        const meta = await sock.groupMetadata(id);
-        groupName  = meta.subject || id;
-      } catch (_) {}
+      try { const meta = await sock.groupMetadata(id); groupName = meta.subject || id; } catch (_) {}
 
-      // ── Welcome ──
       if (action === 'add' && groupDb.welcome?.enabled) {
         const template = groupDb.welcome.message || '{user} joined {group}';
-
         for (const jid of participants) {
-          const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
-          const user   = jidStr.split('@')[0];
-
-          // build message: replace {user} with mention placeholder, wrap all in italic
-          const raw = template
-            .replace(/{user}/g,  `\uFFF0${user}\uFFF1`)
-            .replace(/{group}/g, groupName);
-
-          // wrap non-mention parts in italic
-          const finalMsg = raw
-            .replace(/\uFFF0(\S+)\uFFF1/g, (_, u) => `@${u}`)
-            .replace(/^/, '_').replace(/$/, '_');
-
-          await sock.sendMessage(id, {
-            text: finalMsg,
-            mentions: [jidStr]
-          }).catch(() => {});
+          const jidStr   = typeof jid === 'string' ? jid : (jid.id || String(jid));
+          const user     = jidStr.split('@')[0];
+          const finalMsg = '_' + template.replace(/{user}/g, `@${user}`).replace(/{group}/g, groupName) + '_';
+          await sock.sendMessage(id, { text: finalMsg, mentions: [jidStr] }).catch(() => {});
         }
       }
 
-      // ── Goodbye ──
       if ((action === 'remove' || action === 'leave') && groupDb.goodbye?.enabled) {
         const template = groupDb.goodbye.message || '{user} left {group}';
-
         for (const jid of participants) {
-          const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
-          const user   = jidStr.split('@')[0];
-
-          const raw = template
-            .replace(/{user}/g,  `\uFFF0${user}\uFFF1`)
-            .replace(/{group}/g, groupName);
-
-          const finalMsg = raw
-            .replace(/\uFFF0(\S+)\uFFF1/g, (_, u) => `@${u}`)
-            .replace(/^/, '_').replace(/$/, '_');
-
-          await sock.sendMessage(id, {
-            text: finalMsg,
-            mentions: [jidStr]
-          }).catch(() => {});
+          const jidStr   = typeof jid === 'string' ? jid : (jid.id || String(jid));
+          const user     = jidStr.split('@')[0];
+          const finalMsg = '_' + template.replace(/{user}/g, `@${user}`).replace(/{group}/g, groupName) + '_';
+          await sock.sendMessage(id, { text: finalMsg, mentions: [jidStr] }).catch(() => {});
         }
       }
 
-      // ── Promote event (only if pdm is on for this group) ──
-      if (action === 'promote') {
+      if (action === 'promote' || action === 'demote') {
         let gsDb = {};
         try {
           const gsFile = path.join(__dirname, 'database', 'group_settings.json');
@@ -271,48 +212,20 @@ const start = async () => {
         } catch (_) {}
 
         if (gsDb[id]?.pdm) {
+          const verb    = action === 'promote' ? 'promoted as admin' : 'demoted as admin';
+          const byStr   = author ? `by @${author.split('@')[0]}` : '';
           for (const jid of participants) {
             const jidStr  = typeof jid === 'string' ? jid : (jid.id || String(jid));
-            const byStr   = author || '';
             const mentions = [jidStr];
-            if (byStr) mentions.push(byStr);
-            const byText  = byStr ? ` by @${byStr.split('@')[0]}` : '';
-
+            if (author) mentions.push(author);
             await sock.sendMessage(id, {
-              text: `@${jidStr.split('@')[0]} _promoted as admin${byText}_`,
+              text: `@${jidStr.split('@')[0]} _${verb}${byStr ? ' ' + byStr : ''}_`,
               mentions
             }).catch(() => {});
           }
         }
       }
-
-      // ── Demote event (only if pdm is on for this group) ──
-      if (action === 'demote') {
-        let gsDb = {};
-        try {
-          const gsFile = path.join(__dirname, 'database', 'group_settings.json');
-          if (fs.existsSync(gsFile)) gsDb = JSON.parse(fs.readFileSync(gsFile, 'utf8'));
-        } catch (_) {}
-
-        if (gsDb[id]?.pdm) {
-          for (const jid of participants) {
-            const jidStr  = typeof jid === 'string' ? jid : (jid.id || String(jid));
-            const byStr   = author || '';
-            const mentions = [jidStr];
-            if (byStr) mentions.push(byStr);
-            const byText  = byStr ? ` by @${byStr.split('@')[0]}` : '';
-
-            await sock.sendMessage(id, {
-              text: `@${jidStr.split('@')[0]} _demoted as admin${byText}_`,
-              mentions
-            }).catch(() => {});
-          }
-        }
-      }
-
-    } catch (e) {
-      log.error('group-participants.update error: ' + e.message);
-    }
+    } catch (e) { log.error('group-participants.update error: ' + e.message); }
   });
 
   // ── Connection ────────────────────────────────────────────────────
@@ -331,45 +244,47 @@ const start = async () => {
         if (fs.existsSync(sp)) require('./plugins/startup').execute(sock);
       } catch (_) {}
     }
-
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) {
-        log.error('Logged out — get a new SESSION_ID');
-        process.exit(1);
-      }
+      if (code === DisconnectReason.loggedOut) { log.error('Logged out — get a new SESSION_ID'); process.exit(1); }
       log.warn(`Reconnecting (${code})...`);
       setTimeout(start, 5000);
     }
   });
 
+  // ── Load anti-function module once ───────────────────────────────
+  const AF = require('./library/antifunction');
+
   // ── Message handler ───────────────────────────────────────────────
-  const handler    = require('./main');
-  const antidelete = require('./library/antidelete');
+  const handler = require('./main');
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     const raw = messages[0];
     if (!raw?.message) return;
+    if (!raw?.key?.id) return;
 
-    // ── FIX 1: Block BAE5 WhatsApp system-generated message IDs ──
+    // Block BAE5 system IDs
     if (raw.key?.id?.startsWith('BAE5') && raw.key.id.length === 16) return;
 
-    // ── Block bot's own messages from re-entering handler loop ──
-    // fromMe messages in groups cause empty message spam if not gated here
+    // Skip status broadcast
+    if (raw.key.remoteJid === 'status@broadcast') return;
+
+    // ── NULL MESSAGE FIX: block fromMe empty messages ────────────
+    // Bot's own sent messages cause the null spam in groups
     if (raw.key.fromMe) {
-      // Only let owner-triggered commands through, skip all auto-sent bot messages
       const selfBody = (
         raw.message?.conversation?.trim() ||
         raw.message?.extendedTextMessage?.text?.trim() ||
         ''
       );
-      // If bot sent an empty/reaction/status message, drop it entirely
-      if (!selfBody) return;
+      if (!selfBody) return; // drop all empty bot-sent messages — this stops the null spam
     }
 
-    // ── Antidelete: store every incoming message (non-bot only) ──
-    if (!raw.key.fromMe) antidelete.storeMessage(sock, raw).catch(() => {});
+    // ── ANTIDELETE: store every incoming non-bot message ─────────
+    if (!raw.key.fromMe) {
+      AF.storeMessage(sock, raw).catch(() => {});
+    }
 
     // Unwrap ephemeral
     if (raw.message.ephemeralMessage) {
@@ -381,8 +296,7 @@ const start = async () => {
     if (SILENT_TYPES.has(mtype)) return;
     if (raw.messageStubType) return;
 
-    // ── FIX 2: Full safe message content extraction ──
-    // All message types resolved — always produces a string, never undefined
+    // ── Safe body extraction ─────────────────────────────────────
     const messageContent = (
       raw.message.conversation?.trim() ||
       raw.message.extendedTextMessage?.text?.trim() ||
@@ -394,8 +308,6 @@ const start = async () => {
       ''
     );
 
-    // Allow any media message through even without text body
-    // (image, video, audio, sticker, document may have no caption but still need moderation)
     const isMediaMsg = !!(
       raw.message.stickerMessage  ||
       raw.message.imageMessage    ||
@@ -404,10 +316,10 @@ const start = async () => {
       raw.message.documentMessage
     );
 
-    // Drop ONLY pure empty text messages with no media
+    // Drop pure empty non-media messages
     if (!isMediaMsg && !messageContent) return;
 
-    // Rate limiting & dedup (only for non-bot messages)
+    // Rate limiting & dedup (non-bot only)
     if (!raw.key.fromMe) {
       if (seenIds.has(raw.key.id)) return;
       seenIds.add(raw.key.id);
@@ -423,14 +335,23 @@ const start = async () => {
     try {
       const { smsg } = require('./library/manager');
       const m = smsg(sock, raw);
-      if (m) await handler(sock, m);
+      if (!m) return;
+
+      // ── GROUP PROTECTION: runs DIRECTLY here, before plugin handler ──
+      // Same approach as KnightBot — not through plugin loader
+      if (m.isGroup && !m.fromMe) {
+        AF.runGroupProtection(sock, m).catch(() => {});
+      }
+
+      await handler(sock, m);
     } catch (err) {
       log.error(`Error handling message: ${err.message}`);
     }
   });
-  // ── Message delete (revocation) detection ─────────────────────────
+
+  // ── Deletion detection ────────────────────────────────────────────
   sock.ev.on('messages.update', (updates) => {
-    antidelete.handleRevocation(sock, updates).catch(() => {});
+    AF.handleRevocation(sock, updates).catch(() => {});
   });
 };
 
