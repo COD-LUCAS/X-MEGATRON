@@ -276,7 +276,7 @@ const start = async () => {
             const byStr   = author || '';
             const mentions = [jidStr];
             if (byStr) mentions.push(byStr);
-            const byText  = byStr ? ` _by_ @${byStr.split('@')[0]}` : '';
+            const byText  = byStr ? ` by @${byStr.split('@')[0]}` : '';
 
             await sock.sendMessage(id, {
               text: `@${jidStr.split('@')[0]} _promoted as admin${byText}_`,
@@ -300,7 +300,7 @@ const start = async () => {
             const byStr   = author || '';
             const mentions = [jidStr];
             if (byStr) mentions.push(byStr);
-            const byText  = byStr ? ` _by_ @${byStr.split('@')[0]}` : '';
+            const byText  = byStr ? ` by @${byStr.split('@')[0]}` : '';
 
             await sock.sendMessage(id, {
               text: `@${jidStr.split('@')[0]} _demoted as admin${byText}_`,
