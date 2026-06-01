@@ -1,3 +1,4 @@
+
 /**
  * library/antibadword.js
  * Antibadword helper — detection + per-group config.
