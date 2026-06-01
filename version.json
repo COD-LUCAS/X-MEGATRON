@@ -1,7 +1,15 @@
 {
-  "version": "0.0.5",
+  "version": "0.0.6",
   "features": [
     "PLUGIN ARRANGE",
-    "BAILEYS UPDATE"
+    "BAILEYS UPDATE",
+    "NULL MESSAGE BUG FIX",
+    "ANTISPAM FIXED",
+    "ANTILINK FIXED",
+    "ANTIBADWORD FIXED",
+    "ANTITAG FIXED",
+    "FANCY TEXT PLUGIN",
+    "TTS LONG TEXT SUPPORT",
+    "TTS LINE BREAK SUPPORT"
   ]
 }
