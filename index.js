@@ -18,7 +18,8 @@ try {
   }
   const dbDir = path.join(__dirname, 'database');
   if (fs.existsSync(dbDir)) {
-    fs.readdirSync(dbDir).filter(f => f.startsWith('eval_') && (f.endsWith('.txt') || f.endsWith('.js')))
+    fs.readdirSync(dbDir)
+      .filter(f => f.startsWith('eval_') && (f.endsWith('.txt') || f.endsWith('.js')))
       .forEach(f => { try { fs.unlinkSync(path.join(dbDir, f)); } catch (_) {} });
   }
 } catch (_) {}
@@ -40,6 +41,7 @@ setInterval(() => {
       });
     }
   });
+  log.info('Temp folder cleaned');
 }, 3 * 60 * 60 * 1000);
 
 // ── RAM watchdog ─────────────────────────────────────────────────────
@@ -48,7 +50,7 @@ setInterval(() => {
   if (used > 400) { log.warn(`RAM ${used.toFixed(0)}MB > 400MB — restarting`); process.exit(1); }
 }, 30_000);
 
-// ── Silent message types ─────────────────────────────────────────────
+// ── Silent types ─────────────────────────────────────────────────────
 const SILENT_TYPES = new Set([
   'protocolMessage', 'senderKeyDistributionMessage', 'reactionMessage',
   'pollUpdateMessage', 'groupV2Change', 'groupNotification',
@@ -180,7 +182,6 @@ const start = async () => {
     try {
       const db      = loadGroupEventsDB();
       const groupDb = db[id] || {};
-
       let groupName = id;
       try { const meta = await sock.groupMetadata(id); groupName = meta.subject || id; } catch (_) {}
 
@@ -210,16 +211,15 @@ const start = async () => {
           const gsFile = path.join(__dirname, 'database', 'group_settings.json');
           if (fs.existsSync(gsFile)) gsDb = JSON.parse(fs.readFileSync(gsFile, 'utf8'));
         } catch (_) {}
-
         if (gsDb[id]?.pdm) {
-          const verb    = action === 'promote' ? 'promoted as admin' : 'demoted as admin';
-          const byStr   = author ? `by @${author.split('@')[0]}` : '';
+          const verb = action === 'promote' ? 'promoted as admin' : 'demoted as admin';
           for (const jid of participants) {
             const jidStr  = typeof jid === 'string' ? jid : (jid.id || String(jid));
             const mentions = [jidStr];
             if (author) mentions.push(author);
+            const byText  = author ? ` by @${author.split('@')[0]}` : '';
             await sock.sendMessage(id, {
-              text: `@${jidStr.split('@')[0]} _${verb}${byStr ? ' ' + byStr : ''}_`,
+              text: `@${jidStr.split('@')[0]} _${verb}${byText}_`,
               mentions
             }).catch(() => {});
           }
@@ -232,17 +232,8 @@ const start = async () => {
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
       log.success(`Connected as +${sock.user?.id?.split(':')[0]}`);
-      try {
-        const upd = require('./plugins/updater');
-        if (upd.init) {
-          const owners = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean);
-          if (owners.length) upd.init(sock, owners);
-        }
-      } catch (_) {}
-      try {
-        const sp = path.join(__dirname, 'plugins', 'startup.js');
-        if (fs.existsSync(sp)) require('./plugins/startup').execute(sock);
-      } catch (_) {}
+      try { const upd = require('./plugins/updater'); if (upd.init) { const owners = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean); if (owners.length) upd.init(sock, owners); } } catch (_) {}
+      try { const sp = path.join(__dirname, 'plugins', 'startup.js'); if (fs.existsSync(sp)) require('./plugins/startup').execute(sock); } catch (_) {}
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
@@ -252,7 +243,8 @@ const start = async () => {
     }
   });
 
-  // ── Load anti-function module once ───────────────────────────────
+  // ── Load anti module ──────────────────────────────────────────────
+  // Single module handles: antispam, antilink, antibadword, antidelete
   const AF = require('./library/antifunction');
 
   // ── Message handler ───────────────────────────────────────────────
@@ -270,15 +262,17 @@ const start = async () => {
     // Skip status broadcast
     if (raw.key.remoteJid === 'status@broadcast') return;
 
-    // ── NULL MESSAGE FIX: block fromMe empty messages ────────────
-    // Bot's own sent messages cause the null spam in groups
+    // ── NULL MESSAGE FIX ─────────────────────────────────────────
+    // Bot's own empty messages (reactions, read receipts sent back as messages,
+    // group event notifications) cause the null spam loop in groups.
+    // Drop ALL fromMe messages that carry no actual text.
     if (raw.key.fromMe) {
       const selfBody = (
         raw.message?.conversation?.trim() ||
         raw.message?.extendedTextMessage?.text?.trim() ||
         ''
       );
-      if (!selfBody) return; // drop all empty bot-sent messages — this stops the null spam
+      if (!selfBody) return;
     }
 
     // ── ANTIDELETE: store every incoming non-bot message ─────────
@@ -296,7 +290,7 @@ const start = async () => {
     if (SILENT_TYPES.has(mtype)) return;
     if (raw.messageStubType) return;
 
-    // ── Safe body extraction ─────────────────────────────────────
+    // Safe body extraction
     const messageContent = (
       raw.message.conversation?.trim() ||
       raw.message.extendedTextMessage?.text?.trim() ||
@@ -308,6 +302,7 @@ const start = async () => {
       ''
     );
 
+    // Allow all media through even without caption
     const isMediaMsg = !!(
       raw.message.stickerMessage  ||
       raw.message.imageMessage    ||
@@ -337,8 +332,9 @@ const start = async () => {
       const m = smsg(sock, raw);
       if (!m) return;
 
-      // ── GROUP PROTECTION: runs DIRECTLY here, before plugin handler ──
-      // Same approach as KnightBot — not through plugin loader
+      // ── GROUP PROTECTION ─────────────────────────────────────
+      // Called DIRECTLY here — not through plugin loader
+      // Runs on every group message before command handler
       if (m.isGroup && !m.fromMe) {
         AF.runGroupProtection(sock, m).catch(() => {});
       }
