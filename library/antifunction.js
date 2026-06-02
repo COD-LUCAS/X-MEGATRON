@@ -540,4 +540,32 @@ async function runGroupProtection(sock, m) {
   // Run all checks — independent, all run even if one acts
   await runAntispam(sock, m, isBotAdmin, isSenderAdmin).catch(() => {});
   await runAntilink(sock, m, isSenderAdmin).catch(() => {});
-  await runAntibadword(sock, m, isBotAdmin,
+  await runAntibadword(sock, m, isBotAdmin, isSenderAdmin).catch(() => {});
+}
+
+// ─────────────────────────────────────────────────────────────────────
+module.exports = {
+  // Master runner (call from index.js)
+  runGroupProtection,
+  storeMessage,
+  handleRevocation,
+
+  // Antidelete config
+  loadAdConfig,
+  saveAdConfig,
+
+  // Antilink
+  setAntilink, getAntilink, removeAntilink,
+  containsLink,
+
+  // Antibadword
+  setAntibadword, getAntibadword, removeAntibadword,
+  addBadword, removeBadword, getBadwords,
+  detectBadWord,
+
+  // Antispam
+  setAntispam, getAntispam, removeAntispam,
+
+  // Warnings
+  incrementWarning, resetWarning,
+};
