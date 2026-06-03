@@ -7,14 +7,12 @@ const EXT_PLUGIN_DIR = path.join(__dirname, "..", "database", "external_plugins"
 const DB_DIR = path.join(__dirname, "..", "database");
 const SETTINGS_FILE = path.join(DB_DIR, "settings.json");
 
-// Default settings
 let settings = {
   botName: "𐍇 - 𐌼𐌴𐌾𐌰𐍄𐍂𐍈𐍀",
   menuImage: "https://files.catbox.moe/a6pqf1.jpg",
   owner: "COD-LUCAS"
 };
 
-// Load settings
 try {
   if (fs.existsSync(SETTINGS_FILE)) {
     const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
@@ -35,51 +33,41 @@ function formatUptime(seconds) {
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
-
   if (d > 0) return `${d}d ${h}h ${m}m ${s}s`;
   if (h > 0) return `${h}h ${m}m ${s}s`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
 
-function buildMenuCache(prefix) {
+function buildMenuCache() {
   const categories = {};
   const pluginDirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
 
   for (const dir of pluginDirs) {
     if (!fs.existsSync(dir)) continue;
-
     const files = fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js");
 
     for (const file of files) {
       try {
         delete require.cache[require.resolve(path.join(dir, file))];
         const plugin = require(path.join(dir, file));
-
         if (!plugin?.command) continue;
-
-        const category = plugin.category || "basic";
+        const category = (plugin.category || "basic").toUpperCase();
         if (!categories[category]) categories[category] = [];
-
         const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
-        cmds.forEach(cmd => {
-          categories[category].push(cmd);
-        });
+        cmds.forEach(cmd => categories[category].push(cmd));
       } catch (e) {}
     }
   }
-
   return categories;
 }
 
 const getTotalCommands = () => {
   let count = 0;
   const pluginDirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
-
   for (const dir of pluginDirs) {
     if (!fs.existsSync(dir)) continue;
     const files = fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js");
-
     for (const file of files) {
       try {
         const plugin = require(path.join(dir, file));
@@ -103,8 +91,13 @@ module.exports = {
       const mode = (process.env.MODE || "public").toUpperCase();
       const userName = m.pushName ? m.pushName.replace(/[\r\n]+/gm, "") : m.sender.split('@')[0];
 
-      const botName = settings.botName;
-      const owner = settings.owner;
+      const botName   = settings.botName;
+      const owner     = settings.owner;
+      const uptime    = formatUptime(process.uptime());
+      const server    = os.platform().toUpperCase();
+      const freeMem   = formatBytes(os.freemem());
+      const totalCmds = getTotalCommands();
+
       const totalPlugins = (() => {
         let count = 0;
         const dirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
@@ -116,47 +109,48 @@ module.exports = {
         return count;
       })();
 
-      const totalCommands = getTotalCommands();
-      const uptime = formatUptime(process.uptime());
-      const server = os.platform().toUpperCase();
-      const freeMem = formatBytes(os.freemem());
-
       let version = "unknown";
       try {
-        const versionFile = path.join(__dirname, "..", "version.json");
-        if (fs.existsSync(versionFile)) {
-          const v = JSON.parse(fs.readFileSync(versionFile, "utf8"));
+        const vFile = path.join(__dirname, "..", "version.json");
+        if (fs.existsSync(vFile)) {
+          const v = JSON.parse(fs.readFileSync(vFile, "utf8"));
           version = v.version || version;
         }
       } catch {}
 
-      let text = `*${botName}*\n`;
-      text += `────────────────────\n\n`;
-      text += `*PREFIX*  : _${prefix}_\n`;
-      text += `*MODE*    : _${mode}_\n`;
-      text += `*OWNER*   : _${owner}_\n`;
-      text += `*USER*    : _${userName}_\n`;
-      text += `*SERVER*  : _${server}_\n`;
-      text += `*RAM*     : _${freeMem}_\n`;
-      text += `*VERSION* : _${version}_\n`;
-      text += `*UPTIME*  : _${uptime}_\n`;
-      text += `*PLUGINS* : _${totalPlugins}_\n`;
-      text += `*COMMANDS*: _${totalCommands}_\n\n`;
-      text += `════════════════════\n\n`;
+      // ── Header ────────────────────────────────────────────────────
+      let text = `*${botName}*\n\n`;
+      text += `\`\`\`\n`;
+      text += `┌─────────────────────\n`;
+      text += `│ PREFIX   : ${prefix}\n`;
+      text += `│ MODE     : ${mode}\n`;
+      text += `│ OWNER    : ${owner}\n`;
+      text += `│ USER     : ${userName}\n`;
+      text += `├─────────────────────\n`;
+      text += `│ SERVER   : ${server}\n`;
+      text += `│ RAM      : ${freeMem}\n`;
+      text += `│ VERSION  : ${version}\n`;
+      text += `│ UPTIME   : ${uptime}\n`;
+      text += `├─────────────────────\n`;
+      text += `│ PLUGINS  : ${totalPlugins}\n`;
+      text += `│ COMMANDS : ${totalCmds}\n`;
+      text += `└─────────────────────\n`;
+      text += `\`\`\`\n\n`;
 
-      const CACHED_MENU = buildMenuCache(prefix);
-      let counter = 1;
+      // ── Categories ────────────────────────────────────────────────
+      const CACHED_MENU = buildMenuCache();
 
-      for (const cat of Object.keys(CACHED_MENU)) {
-        text += `*${cat}:*\n`;
-        for (const cmd of CACHED_MENU[cat]) {
-          text += `_${counter}. ${prefix}${cmd}_\n`;
-          counter++;
-        }
-        text += `\n`;
+      for (const cat of Object.keys(CACHED_MENU).sort()) {
+        const cmds = CACHED_MENU[cat];
+        text += `*[ ${cat} ]*\n`;
+        text += `\`\`\`\n`;
+        cmds.forEach((cmd, i) => {
+          text += `${String(i + 1).padStart(2, '0')}. ${prefix}${cmd}\n`;
+        });
+        text += `\`\`\`\n\n`;
       }
 
-      // Get image from settings (Catbox URL only)
+      // ── Image ─────────────────────────────────────────────────────
       const imageUrl = settings.menuImage;
       let imageBuffer;
 
@@ -172,10 +166,7 @@ module.exports = {
         imageBuffer = { url: "https://files.catbox.moe/a6pqf1.jpg" };
       }
 
-      await sock.sendMessage(m.chat, {
-        image: imageBuffer,
-        caption: text
-      }, { quoted: m });
+      await sock.sendMessage(m.chat, { image: imageBuffer, caption: text }, { quoted: m });
 
     } catch (e) {
       console.error("Menu error:", e);
