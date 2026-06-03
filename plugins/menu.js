@@ -7,12 +7,14 @@ const EXT_PLUGIN_DIR = path.join(__dirname, "..", "database", "external_plugins"
 const DB_DIR = path.join(__dirname, "..", "database");
 const SETTINGS_FILE = path.join(DB_DIR, "settings.json");
 
+// Default settings
 let settings = {
   botName: "𐍇 - 𐌼𐌴𐌾𐌰𐍄𐍂𐍈𐍀",
   menuImage: "https://files.catbox.moe/a6pqf1.jpg",
   owner: "COD-LUCAS"
 };
 
+// Load settings
 try {
   if (fs.existsSync(SETTINGS_FILE)) {
     const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
@@ -22,6 +24,10 @@ try {
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
   }
 } catch (e) {}
+
+// Track plugin file count to detect changes
+let lastPluginCount = 0;
+let lastExternalPluginsCount = 0;
 
 function formatBytes(bytes) {
   const gb = (bytes / (1024 ** 3)).toFixed(2);
@@ -33,53 +39,101 @@ function formatUptime(seconds) {
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
+
   if (d > 0) return `${d}d ${h}h ${m}m ${s}s`;
   if (h > 0) return `${h}h ${m}m ${s}s`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
 
-function buildMenuCache() {
+// Check if plugins have changed
+function havePluginsChanged() {
+  let currentCount = 0;
+  const pluginsDir = PLUGIN_DIR;
+  if (fs.existsSync(pluginsDir)) {
+    currentCount = fs.readdirSync(pluginsDir).filter(f => f.endsWith(".js") && f !== "menu.js").length;
+  }
+  
+  let externalCount = 0;
+  if (fs.existsSync(EXT_PLUGIN_DIR)) {
+    externalCount = fs.readdirSync(EXT_PLUGIN_DIR).filter(f => f.endsWith(".js")).length;
+  }
+  
+  const changed = (currentCount !== lastPluginCount) || (externalCount !== lastExternalPluginsCount);
+  
+  if (changed) {
+    lastPluginCount = currentCount;
+    lastExternalPluginsCount = externalCount;
+  }
+  
+  return changed;
+}
+
+// ─── CACHING SYSTEM ─────────────────────────────────────────────────
+let cachedMenu = null;
+let cachedTotalPlugins = null;
+let cachedTotalCommands = null;
+let lastCacheTime = 0;
+const CACHE_TTL = 30000; // 30 seconds cache
+
+function refreshCache(prefix) {
+  const now = Date.now();
+  const pluginsChanged = havePluginsChanged();
+  
+  if (cachedMenu && !pluginsChanged && (now - lastCacheTime) < CACHE_TTL) {
+    return;
+  }
+
   const categories = {};
   const pluginDirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
+  let pluginCount = 0;
+  let commandCount = 0;
 
   for (const dir of pluginDirs) {
     if (!fs.existsSync(dir)) continue;
+
     const files = fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js");
+    pluginCount += files.length;
 
     for (const file of files) {
       try {
         delete require.cache[require.resolve(path.join(dir, file))];
         const plugin = require(path.join(dir, file));
+
         if (!plugin?.command) continue;
-        const category = (plugin.category || "basic").toUpperCase();
+
+        const category = plugin.category || "basic";
         if (!categories[category]) categories[category] = [];
+
         const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
-        cmds.forEach(cmd => categories[category].push(cmd));
+        commandCount += cmds.length;
+        cmds.forEach(cmd => {
+          categories[category].push(cmd);
+        });
       } catch (e) {}
     }
   }
-  return categories;
+
+  cachedMenu = categories;
+  cachedTotalPlugins = pluginCount;
+  cachedTotalCommands = commandCount;
+  lastCacheTime = now;
 }
 
-const getTotalCommands = () => {
-  let count = 0;
-  const pluginDirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
-  for (const dir of pluginDirs) {
-    if (!fs.existsSync(dir)) continue;
-    const files = fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js");
-    for (const file of files) {
-      try {
-        const plugin = require(path.join(dir, file));
-        if (plugin?.command) {
-          const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
-          count += cmds.length;
-        }
-      } catch (e) {}
-    }
-  }
-  return count;
-};
+function buildMenuCache(prefix) {
+  refreshCache(prefix);
+  return cachedMenu;
+}
+
+function getTotalPlugins() {
+  refreshCache();
+  return cachedTotalPlugins;
+}
+
+function getTotalCommands() {
+  refreshCache();
+  return cachedTotalCommands;
+}
 
 module.exports = {
   command: ["menu", "help"],
@@ -87,40 +141,33 @@ module.exports = {
 
   async execute(sock, m, context) {
     try {
+      await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } }).catch(() => {});
+
       const prefix = context.prefix || ".";
       const mode = (process.env.MODE || "public").toUpperCase();
       const userName = m.pushName ? m.pushName.replace(/[\r\n]+/gm, "") : m.sender.split('@')[0];
 
-      const botName   = settings.botName;
-      const owner     = settings.owner;
-      const uptime    = formatUptime(process.uptime());
-      const server    = os.platform().toUpperCase();
-      const freeMem   = formatBytes(os.freemem());
-      const totalCmds = getTotalCommands();
-
-      const totalPlugins = (() => {
-        let count = 0;
-        const dirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
-        for (const dir of dirs) {
-          if (fs.existsSync(dir)) {
-            count += fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js").length;
-          }
-        }
-        return count;
-      })();
+      const botName = settings.botName;
+      const owner = settings.owner;
+      const totalPlugins = getTotalPlugins();
+      const totalCommands = getTotalCommands();
+      const uptime = formatUptime(process.uptime());
+      const server = os.platform().toUpperCase();
+      const freeMem = formatBytes(os.freemem());
 
       let version = "unknown";
       try {
-        const vFile = path.join(__dirname, "..", "version.json");
-        if (fs.existsSync(vFile)) {
-          const v = JSON.parse(fs.readFileSync(vFile, "utf8"));
+        const versionFile = path.join(__dirname, "..", "version.json");
+        if (fs.existsSync(versionFile)) {
+          const v = JSON.parse(fs.readFileSync(versionFile, "utf8"));
           version = v.version || version;
         }
       } catch {}
 
-      // ── Header with Monospace Font (no box) ───────────────────────
-      let text = `*${botName}*\n`;
-      text += `\`\`\`\n`;
+      // ── Full Monospace Menu ────────────────────────────────────────
+      let text = `\`\`\`\n`;
+      text += `${botName}\n`;
+      text += `${'─'.repeat(20)}\n\n`;
       text += `PREFIX   : ${prefix}\n`;
       text += `MODE     : ${mode}\n`;
       text += `OWNER    : ${owner}\n`;
@@ -130,23 +177,23 @@ module.exports = {
       text += `VERSION  : ${version}\n`;
       text += `UPTIME   : ${uptime}\n`;
       text += `PLUGINS  : ${totalPlugins}\n`;
-      text += `COMMANDS : ${totalCmds}\n`;
-      text += `\`\`\`\n\n`;
+      text += `COMMANDS : ${totalCommands}\n\n`;
+      text += `${'='.repeat(20)}\n\n`;
 
-      // ── Categories ────────────────────────────────────────────────
-      const CACHED_MENU = buildMenuCache();
+      const CACHED_MENU = buildMenuCache(prefix);
+      let counter = 1;
 
-      for (const cat of Object.keys(CACHED_MENU).sort()) {
-        const cmds = CACHED_MENU[cat];
-        text += `*[ ${cat} ]*\n`;
-        text += `\`\`\`\n`;
-        cmds.forEach((cmd, i) => {
-          text += `${String(i + 1).padStart(2, '0')}. ${prefix}${cmd}\n`;
-        });
-        text += `\`\`\`\n\n`;
+      for (const cat of Object.keys(CACHED_MENU)) {
+        text += `[ ${cat} ]\n`;
+        for (const cmd of CACHED_MENU[cat]) {
+          text += `${String(counter).padStart(2, '0')}. ${prefix}${cmd}\n`;
+          counter++;
+        }
+        text += `\n`;
       }
+      text += `\`\`\``;
 
-      // ── Image ─────────────────────────────────────────────────────
+      // Get image from settings
       const imageUrl = settings.menuImage;
       let imageBuffer;
 
@@ -162,10 +209,16 @@ module.exports = {
         imageBuffer = { url: "https://files.catbox.moe/a6pqf1.jpg" };
       }
 
-      await sock.sendMessage(m.chat, { image: imageBuffer, caption: text }, { quoted: m });
+      await sock.sendMessage(m.chat, {
+        image: imageBuffer,
+        caption: text
+      }, { quoted: m });
+
+      await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } }).catch(() => {});
 
     } catch (e) {
       console.error("Menu error:", e);
+      await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } }).catch(() => {});
       await m.reply("_Failed to load menu_");
     }
   }
