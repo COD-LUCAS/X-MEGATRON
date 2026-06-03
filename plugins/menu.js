@@ -118,7 +118,7 @@ module.exports = {
         }
       } catch {}
 
-      // ── Header ────────────────────────────────────────────────────
+      // ── Header with Monospace Font (no box) ───────────────────────
       let text = `*${botName}*\n`;
       text += `\`\`\`\n`;
       text += `PREFIX   : ${prefix}\n`;
