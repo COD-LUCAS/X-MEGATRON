@@ -25,10 +25,6 @@ try {
   }
 } catch (e) {}
 
-// Track plugin file count to detect changes
-let lastPluginCount = 0;
-let lastExternalPluginsCount = 0;
-
 function formatBytes(bytes) {
   const gb = (bytes / (1024 ** 3)).toFixed(2);
   return `${gb} GB`;
@@ -46,54 +42,14 @@ function formatUptime(seconds) {
   return `${s}s`;
 }
 
-// Check if plugins have changed
-function havePluginsChanged() {
-  let currentCount = 0;
-  const pluginsDir = PLUGIN_DIR;
-  if (fs.existsSync(pluginsDir)) {
-    currentCount = fs.readdirSync(pluginsDir).filter(f => f.endsWith(".js") && f !== "menu.js").length;
-  }
-  
-  let externalCount = 0;
-  if (fs.existsSync(EXT_PLUGIN_DIR)) {
-    externalCount = fs.readdirSync(EXT_PLUGIN_DIR).filter(f => f.endsWith(".js")).length;
-  }
-  
-  const changed = (currentCount !== lastPluginCount) || (externalCount !== lastExternalPluginsCount);
-  
-  if (changed) {
-    lastPluginCount = currentCount;
-    lastExternalPluginsCount = externalCount;
-  }
-  
-  return changed;
-}
-
-// ─── CACHING SYSTEM ─────────────────────────────────────────────────
-let cachedMenu = null;
-let cachedTotalPlugins = null;
-let cachedTotalCommands = null;
-let lastCacheTime = 0;
-const CACHE_TTL = 30000; // 30 seconds cache
-
-function refreshCache(prefix) {
-  const now = Date.now();
-  const pluginsChanged = havePluginsChanged();
-  
-  if (cachedMenu && !pluginsChanged && (now - lastCacheTime) < CACHE_TTL) {
-    return;
-  }
-
+function buildMenuCache(prefix) {
   const categories = {};
   const pluginDirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
-  let pluginCount = 0;
-  let commandCount = 0;
 
   for (const dir of pluginDirs) {
     if (!fs.existsSync(dir)) continue;
 
     const files = fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js");
-    pluginCount += files.length;
 
     for (const file of files) {
       try {
@@ -106,7 +62,6 @@ function refreshCache(prefix) {
         if (!categories[category]) categories[category] = [];
 
         const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
-        commandCount += cmds.length;
         cmds.forEach(cmd => {
           categories[category].push(cmd);
         });
@@ -114,26 +69,29 @@ function refreshCache(prefix) {
     }
   }
 
-  cachedMenu = categories;
-  cachedTotalPlugins = pluginCount;
-  cachedTotalCommands = commandCount;
-  lastCacheTime = now;
+  return categories;
 }
 
-function buildMenuCache(prefix) {
-  refreshCache(prefix);
-  return cachedMenu;
-}
+const getTotalCommands = () => {
+  let count = 0;
+  const pluginDirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
 
-function getTotalPlugins() {
-  refreshCache();
-  return cachedTotalPlugins;
-}
+  for (const dir of pluginDirs) {
+    if (!fs.existsSync(dir)) continue;
+    const files = fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js");
 
-function getTotalCommands() {
-  refreshCache();
-  return cachedTotalCommands;
-}
+    for (const file of files) {
+      try {
+        const plugin = require(path.join(dir, file));
+        if (plugin?.command) {
+          const cmds = Array.isArray(plugin.command) ? plugin.command : [plugin.command];
+          count += cmds.length;
+        }
+      } catch (e) {}
+    }
+  }
+  return count;
+};
 
 module.exports = {
   command: ["menu", "help"],
@@ -141,15 +99,23 @@ module.exports = {
 
   async execute(sock, m, context) {
     try {
-      await sock.sendMessage(m.chat, { react: { text: '⏳', key: m.key } }).catch(() => {});
-
       const prefix = context.prefix || ".";
       const mode = (process.env.MODE || "public").toUpperCase();
       const userName = m.pushName ? m.pushName.replace(/[\r\n]+/gm, "") : m.sender.split('@')[0];
 
       const botName = settings.botName;
       const owner = settings.owner;
-      const totalPlugins = getTotalPlugins();
+      const totalPlugins = (() => {
+        let count = 0;
+        const dirs = [PLUGIN_DIR, EXT_PLUGIN_DIR];
+        for (const dir of dirs) {
+          if (fs.existsSync(dir)) {
+            count += fs.readdirSync(dir).filter(f => f.endsWith(".js") && f !== "menu.js").length;
+          }
+        }
+        return count;
+      })();
+
       const totalCommands = getTotalCommands();
       const uptime = formatUptime(process.uptime());
       const server = os.platform().toUpperCase();
@@ -164,36 +130,33 @@ module.exports = {
         }
       } catch {}
 
-      // ── Full Monospace Menu ────────────────────────────────────────
-      let text = `\`\`\`\n`;
-      text += `${botName}\n`;
-      text += `${'─'.repeat(20)}\n\n`;
-      text += `PREFIX   : ${prefix}\n`;
-      text += `MODE     : ${mode}\n`;
-      text += `OWNER    : ${owner}\n`;
-      text += `USER     : ${userName}\n`;
-      text += `SERVER   : ${server}\n`;
-      text += `RAM      : ${freeMem}\n`;
-      text += `VERSION  : ${version}\n`;
-      text += `UPTIME   : ${uptime}\n`;
-      text += `PLUGINS  : ${totalPlugins}\n`;
-      text += `COMMANDS : ${totalCommands}\n\n`;
-      text += `${'='.repeat(20)}\n\n`;
+      let text = `*${botName}*\n`;
+      text += `────────────────────\n\n`;
+      text += `*PREFIX*  : _${prefix}_\n`;
+      text += `*MODE*    : _${mode}_\n`;
+      text += `*OWNER*   : _${owner}_\n`;
+      text += `*USER*    : _${userName}_\n`;
+      text += `*SERVER*  : _${server}_\n`;
+      text += `*RAM*     : _${freeMem}_\n`;
+      text += `*VERSION* : _${version}_\n`;
+      text += `*UPTIME*  : _${uptime}_\n`;
+      text += `*PLUGINS* : _${totalPlugins}_\n`;
+      text += `*COMMANDS*: _${totalCommands}_\n\n`;
+      text += `════════════════════\n\n`;
 
       const CACHED_MENU = buildMenuCache(prefix);
       let counter = 1;
 
       for (const cat of Object.keys(CACHED_MENU)) {
-        text += `[ ${cat} ]\n`;
+        text += `*${cat}:*\n`;
         for (const cmd of CACHED_MENU[cat]) {
-          text += `${String(counter).padStart(2, '0')}. ${prefix}${cmd}\n`;
+          text += `_${counter}. ${prefix}${cmd}_\n`;
           counter++;
         }
         text += `\n`;
       }
-      text += `\`\`\``;
 
-      // Get image from settings
+      // Get image from settings (Catbox URL only)
       const imageUrl = settings.menuImage;
       let imageBuffer;
 
@@ -214,11 +177,8 @@ module.exports = {
         caption: text
       }, { quoted: m });
 
-      await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } }).catch(() => {});
-
     } catch (e) {
       console.error("Menu error:", e);
-      await sock.sendMessage(m.chat, { react: { text: '❌', key: m.key } }).catch(() => {});
       await m.reply("_Failed to load menu_");
     }
   }
