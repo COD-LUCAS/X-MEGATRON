@@ -12,20 +12,12 @@
     "pm2:logs": "pm2 logs X-MEGATRON",
     "pm2:delete": "pm2 delete X-MEGATRON"
   },
-  "keywords": [
-    "whatsapp",
-    "bot",
-    "whatsapp-bot",
-    "baileys"
-  ],
+  "keywords": ["whatsapp", "bot", "whatsapp-bot", "baileys"],
   "author": "COD LUCAS",
   "license": "MIT",
-  "engines": {
-    "node": ">=18.0.0"
-  },
+  "engines": { "node": ">=18.0.0" },
   "dependencies": {
     "@adiwajshing/keyed-db": "^0.2.4",
-    "@colors/colors": "^1.6.0",
     "@distube/ytdl-core": "^4.14.4",
     "@hapi/boom": "^10.0.1",
     "@itsliaaa/baileys": "github:itsliaaa/baileys",
@@ -34,7 +26,6 @@
     "axios": "^1.7.9",
     "chalk": "^4.1.2",
     "cheerio": "^1.0.0-rc.12",
-    "csv-parser": "^3.2.1",
     "dotenv": "^16.6.1",
     "express": "^5.2.1",
     "ffmpeg-static": "^5.2.0",
@@ -54,7 +45,6 @@
     "pino": "^9.5.0",
     "qrcode-terminal": "^0.12.0",
     "simple-git": "^3.22.0",
-    "telegraf": "^4.16.3",
     "unzipper": "^0.10.14",
     "wa-sticker-formatter": "^4.4.4",
     "xlsx": "^0.18.5",
