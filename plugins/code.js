@@ -1,13 +1,6 @@
-/**
- * code.js — plugins/code.js
- * Owner-only. Trigger: > (no dot prefix needed)
- * Paste plugin code starting with > to install instantly.
- * Runtime files are wiped on every restart by index.js
- */
-
 'use strict';
 
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 
 const EXT_DIR = path.join(__dirname, '..', 'database', 'external_plugins');
@@ -20,7 +13,7 @@ function validatePlugin(code) {
     errors.push('missing module.exports');
 
   const hasCommand = /command\s*:\s*[\[']/.test(code);
-  const hasOnText  = /handleText|onText/.test(code);
+  const hasOnText = /handleText|onText/.test(code);
   if (!hasCommand && !hasOnText)
     errors.push("missing command field — add: command: ['name']");
 
@@ -78,55 +71,55 @@ async function react(sock, m, emoji) {
 }
 
 module.exports = {
-  // No command — triggered only by > prefix via handleText
-  command: [],
+  command: ['code'],
   category: 'owner',
-  desc: 'Install plugin by pasting code with > prefix',
+  desc: 'Install plugin by replying with code',
+  usage: '.code (reply to code)',
+  owner: true,
 
-  async handleText(sock, m, ctx) {
-    if (!ctx.isOwner) return;
+  async execute(sock, m, context) {
+    const { reply, react: ctxReact, isOwner } = context;
 
-    const body = (m.body || '').trimStart();
-    if (!body.startsWith('>')) return;
+    if (!isOwner) return reply('_Owner only_');
 
-    const code = body.slice(1).replace(/^\s*\n?/, '').trim();
-    if (!code) return;
+    if (!m.quoted) {
+      return reply('_Reply to a code block_\n_Usage: .code_');
+    }
+
+    const code = m.quoted.body || '';
+    if (!code) {
+      return reply('_No code found in replied message_');
+    }
 
     const errors = validatePlugin(code);
 
     if (errors.length > 0) {
-      await react(sock, m, '❌');
+      await ctxReact('❌');
       const msg = errors.map((e, i) => `_${i + 1}. ${e}_`).join('\n');
-      return sock.sendMessage(m.chat, {
-        text: `_plugin validation failed_\n\n${msg}`
-      }, { quoted: m }).catch(() => {});
+      return reply(`_plugin validation failed_\n\n${msg}`);
     }
 
-    const name     = extractName(code);
+    const name = extractName(code);
     const filename = `rt_${name}.js`;
     const filepath = path.join(EXT_DIR, filename);
 
     try {
       fs.writeFileSync(filepath, code, 'utf8');
     } catch (e) {
-      await react(sock, m, '❌');
-      return sock.sendMessage(m.chat, {
-        text: `_failed to save: ${e.message}_`
-      }, { quoted: m }).catch(() => {});
+      await ctxReact('❌');
+      return reply(`_failed to save: ${e.message}_`);
     }
 
     try {
-      if (global.pluginLoader?.reload) global.pluginLoader.reload();
+      if (global.pluginLoader && global.pluginLoader.reload) {
+        global.pluginLoader.reload();
+      }
     } catch (e) {
-      await react(sock, m, '⚠️');
-      return sock.sendMessage(m.chat, {
-        text: `_saved but reload failed: ${e.message}_`
-      }, { quoted: m }).catch(() => {});
+      await ctxReact('⚠️');
+      return reply(`_saved but reload failed: ${e.message}_`);
     }
 
-    await react(sock, m, '✅');
-  },
-
-  // Dummy execute so loader doesn't complain
-  async execute() {}
+    await ctxReact('✅');
+    reply(`_plugin installed: ${name}_`);
+  }
 };
