@@ -8,7 +8,7 @@ if (!fs.existsSync(DATABASE_DIR)) fs.mkdirSync(DATABASE_DIR, { recursive: true }
 
 const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
 
-const readBonds = () => {
+const readBonds  = () => {
   try {
     if (fs.existsSync(BOND_FILE)) return JSON.parse(fs.readFileSync(BOND_FILE, 'utf8'));
   } catch (e) {}
@@ -19,12 +19,47 @@ const writeBonds = (bonds) => {
   try { fs.writeFileSync(BOND_FILE, JSON.stringify(bonds, null, 2)); } catch (e) {}
 };
 
-// Extract hash from ANY sticker message shape Baileys gives us
-function extractHash(stickerMsg) {
+// ── Reliable sticker fingerprint ──────────────────────────────────────
+// fileSha256 changes between sender/receiver contexts in newer Baileys.
+// fileEncSha256 + mediaKey are stable across contexts.
+// We try multiple fields and use whichever exists, in priority order.
+function getStickerFingerprint(stickerMsg) {
   if (!stickerMsg) return null;
-  const raw = stickerMsg.fileSha256 || stickerMsg.message?.stickerMessage?.fileSha256;
-  if (!raw) return null;
-  return Buffer.from(raw).toString('base64');
+
+  const tryBuffer = (val) => {
+    if (!val) return null;
+    try {
+      if (Buffer.isBuffer(val))               return val.toString('hex');
+      if (val instanceof Uint8Array)          return Buffer.from(val).toString('hex');
+      if (typeof val === 'string')            return val;
+      if (val?.type === 'Buffer' && val.data) return Buffer.from(val.data).toString('hex');
+    } catch (_) {}
+    return null;
+  };
+
+  // Priority: fileEncSha256 (most stable) → fileSha256 → mediaKey
+  return (
+    tryBuffer(stickerMsg.fileEncSha256) ||
+    tryBuffer(stickerMsg.fileSha256)    ||
+    tryBuffer(stickerMsg.mediaKey)      ||
+    null
+  );
+}
+
+// Extract sticker from all possible message positions
+function extractSticker(m, isQuoted = false) {
+  if (isQuoted) {
+    return (
+      m.quoted?.message?.stickerMessage ||
+      m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage ||
+      null
+    );
+  }
+  return (
+    m.message?.stickerMessage ||
+    m.msg ||  // smsg() sets m.msg to the inner content
+    null
+  );
 }
 
 module.exports = {
@@ -36,21 +71,18 @@ module.exports = {
   async execute(sock, m, ctx) {
     const { command, args, text, reply, prefix } = ctx;
 
-    // ── .bond <command> — reply to sticker ──────────────────────
+    // ── .bond <command> ────────────────────────────────────────────
     if (command === 'bond') {
       if (!text) return reply(
-        `_reply to a sticker with:_ *.bond <command>*\n_example:_ *.bond ping*`
+        `_reply to a sticker with:_\n*.bond <command>*\n_example:_ *.bond ping*`
       );
 
-      const quotedSticker =
-        m.quoted?.message?.stickerMessage ||
-        m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage ||
-        null;
+      const stickerMsg = extractSticker(m, true);
+      if (!stickerMsg) return reply('_reply to a sticker_');
 
-      const hash = extractHash(quotedSticker);
-      if (!hash) return reply('_reply to a sticker_');
+      const fp = getStickerFingerprint(stickerMsg);
+      if (!fp) return reply('_could not read sticker ID — try sending the sticker again_');
 
-      // Strip prefix from command if user included it
       let targetCmd = text.trim();
       const allPrefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
       for (const p of allPrefixes) {
@@ -59,44 +91,46 @@ module.exports = {
       if (!targetCmd) return reply('_invalid command_');
 
       const bonds = readBonds();
-      bonds[hash] = targetCmd;
+      bonds[fp] = targetCmd;
       writeBonds(bonds);
 
-      // Hot reload so new bond works immediately without restart
       if (global.pluginLoader) global.pluginLoader.reload();
 
       await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } }).catch(() => {});
       return reply(`_bonded ✅ — send that sticker to trigger_ *${prefix}${targetCmd}*`);
     }
 
-    // ── .unbond — reply to sticker OR .unbond <command> ─────────
+    // ── .unbond ────────────────────────────────────────────────────
     if (command === 'unbond') {
+
+      // .unbond all
+      if (args[0]?.toLowerCase() === 'all') {
+        writeBonds({});
+        if (global.pluginLoader) global.pluginLoader.reload();
+        return reply('_all bonds cleared ✅_');
+      }
+
       const bonds = readBonds();
 
-      // Method 1: reply to sticker
-      const quotedSticker =
-        m.quoted?.message?.stickerMessage ||
-        m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage ||
-        null;
-
+      // Reply to sticker
+      const quotedSticker = extractSticker(m, true);
       if (quotedSticker) {
-        const hash = extractHash(quotedSticker);
-        if (!hash || !bonds[hash]) return reply('_sticker not bonded_');
-        const removed = bonds[hash];
-        delete bonds[hash];
+        const fp = getStickerFingerprint(quotedSticker);
+        if (!fp || !bonds[fp]) return reply('_sticker not bonded_');
+        const removed = bonds[fp];
+        delete bonds[fp];
         writeBonds(bonds);
         if (global.pluginLoader) global.pluginLoader.reload();
         return reply(`_unbonded_ *${prefix}${removed}*`);
       }
 
-      // Method 2: .unbond <command>
+      // .unbond <command>
       if (args[0]) {
         let targetCmd = args[0].trim();
         const allPrefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
         for (const p of allPrefixes) {
           if (targetCmd.startsWith(p)) { targetCmd = targetCmd.slice(p.length).trim(); break; }
         }
-
         const entry = Object.entries(bonds).find(([, cmd]) => cmd === targetCmd);
         if (!entry) return reply(`_no bond found for_ *${prefix}${targetCmd}*`);
         delete bonds[entry[0]];
@@ -106,23 +140,24 @@ module.exports = {
       }
 
       return reply(
-        `_reply to bonded sticker OR:_\n*.unbond <command>*\n*.unbond all* _— remove all bonds_`
+        `_reply to bonded sticker OR:_\n` +
+        `*.unbond <command>*\n` +
+        `*.unbond all*`
       );
     }
 
-    // ── .unbond all (alias) ──────────────────────────────────────
-    if (command === 'unbondall' || (command === 'unbond' && args[0]?.toLowerCase() === 'all')) {
+    // ── .unbondall ─────────────────────────────────────────────────
+    if (command === 'unbondall') {
       writeBonds({});
       if (global.pluginLoader) global.pluginLoader.reload();
       return reply('_all bonds cleared ✅_');
     }
 
-    // ── .listbond ────────────────────────────────────────────────
+    // ── .listbond ──────────────────────────────────────────────────
     if (command === 'listbond') {
-      const bonds = readBonds();
+      const bonds  = readBonds();
       const entries = Object.entries(bonds);
       if (!entries.length) return reply('_no bonded stickers_');
-
       let txt = `*BONDED STICKERS*\n_Total: ${entries.length}_\n\n`;
       entries.forEach(([, cmd], i) => {
         txt += `${String(i + 1).padStart(2, '0')}. _${prefix}${cmd}_\n`;
