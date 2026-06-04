@@ -1,13 +1,13 @@
 require('dotenv').config();
 
 const config = require('./config');
-const fs = require('fs');
-const path = require('path');
+const fs     = require('fs');
+const path   = require('path');
 
-const DATABASE_DIR = path.join(__dirname, 'database');
+const DATABASE_DIR    = path.join(__dirname, 'database');
 const EXT_PLUGINS_DIR = path.join(DATABASE_DIR, 'external_plugins');
 
-if (!fs.existsSync(DATABASE_DIR)) fs.mkdirSync(DATABASE_DIR, { recursive: true });
+if (!fs.existsSync(DATABASE_DIR))    fs.mkdirSync(DATABASE_DIR,    { recursive: true });
 if (!fs.existsSync(EXT_PLUGINS_DIR)) fs.mkdirSync(EXT_PLUGINS_DIR, { recursive: true });
 
 global.disabledCommands = global.disabledCommands || new Set();
@@ -21,27 +21,21 @@ const loadDisabled = () => {
 
 global.saveDisabledCommands = () => {
   try {
-    fs.writeFileSync(
-      path.join(DATABASE_DIR, 'disabled_commands.json'),
-      JSON.stringify([...global.disabledCommands])
-    );
+    fs.writeFileSync(path.join(DATABASE_DIR, 'disabled_commands.json'), JSON.stringify([...global.disabledCommands]));
   } catch (e) {}
 };
 
 loadDisabled();
 
 const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
-
 const readBonds = () => {
-  try {
-    if (fs.existsSync(BOND_FILE)) return JSON.parse(fs.readFileSync(BOND_FILE, 'utf8'));
-  } catch (e) {}
+  try { if (fs.existsSync(BOND_FILE)) return JSON.parse(fs.readFileSync(BOND_FILE, 'utf8')); } catch (e) {}
   return {};
 };
 
 const loadSudo = () => {
   const owners = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean);
-  const env = (process.env.SUDO || '').split(',').map(v => v.trim()).filter(Boolean);
+  const env    = (process.env.SUDO  || '').split(',').map(v => v.trim()).filter(Boolean);
   let file = [];
   try {
     const sudoFile = path.join(DATABASE_DIR, 'sudo.json');
@@ -60,14 +54,13 @@ const isSudo = (sender, list) => {
 };
 
 const prefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
-
 const getPrefix = (text) => {
   if (!text) return null;
   for (const p of prefixes) { if (text.startsWith(p)) return p; }
   return null;
 };
 
-const GROUP_EVENTS_DB = path.join(DATABASE_DIR, 'group_events.json');
+const GROUP_EVENTS_DB   = path.join(DATABASE_DIR, 'group_events.json');
 const loadGroupEventsDB = () => {
   try { if (fs.existsSync(GROUP_EVENTS_DB)) return JSON.parse(fs.readFileSync(GROUP_EVENTS_DB, 'utf8')); } catch (_) {}
   return {};
@@ -108,10 +101,10 @@ class Loader {
     if (global.disabledCommands.has(cmd)) return;
     const p = this.map.get(cmd);
     if (!p) return;
-    if (p.owner && !ctx.isOwner) return;
-    if (p.sudo && !ctx.isOwner && !ctx.isSudo) return;
-    if (p.admin && !ctx.isAdmin && !ctx.isOwner) return;
-    if (p.group && !m.isGroup) return;
+    if (p.owner   && !ctx.isOwner) return;
+    if (p.sudo    && !ctx.isOwner && !ctx.isSudo) return;
+    if (p.admin   && !ctx.isAdmin && !ctx.isOwner) return;
+    if (p.group   && !m.isGroup) return;
     if (p.private && m.isGroup) return;
     p.execute(sock, m, ctx);
   }
@@ -132,30 +125,7 @@ class Loader {
 
 const loader = new Loader();
 global.pluginLoader = loader;
-
 const groupMetaCache = new Map();
-
-function getStickerFingerprint(stickerMsg) {
-  if (!stickerMsg) return null;
-
-  const tryBuffer = (val) => {
-    if (!val) return null;
-    try {
-      if (Buffer.isBuffer(val)) return val.toString('hex');
-      if (val instanceof Uint8Array) return Buffer.from(val).toString('hex');
-      if (typeof val === 'string') return val;
-      if (val?.type === 'Buffer' && val.data) return Buffer.from(val.data).toString('hex');
-    } catch (_) {}
-    return null;
-  };
-
-  return (
-    tryBuffer(stickerMsg.fileEncSha256) ||
-    tryBuffer(stickerMsg.fileSha256) ||
-    tryBuffer(stickerMsg.mediaKey) ||
-    null
-  );
-}
 
 module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
@@ -187,8 +157,7 @@ module.exports = async (sock, m) => {
     const { isBanned } = require('./plugins/ban');
     if (isBanned(m.chat)) {
       if (!isFromMe) {
-        const sudoList = loadSudo();
-        if (!isSudo(sender, sudoList)) return;
+        if (!isSudo(sender, loadSudo())) return;
       }
       const hasPrefix = prefixes.some(p => body.startsWith(p));
       if (!hasPrefix) return;
@@ -197,15 +166,15 @@ module.exports = async (sock, m) => {
     }
   } catch (_) {}
 
-  const sudoList = loadSudo();
-  const isOwner = isFromMe || isSudo(sender, sudoList);
+  const sudoList   = loadSudo();
+  const isOwner    = isFromMe || isSudo(sender, sudoList);
   const isSudoUser = !isFromMe && isSudo(sender, sudoList);
 
   const mode = (process.env.MODE || 'public').toLowerCase();
   if (!isFromMe) {
     if (mode === 'private' && !isOwner) return;
-    if (mode === 'group' && !m.isGroup && !isOwner) return;
-    if (mode === 'pm' && m.isGroup && !isOwner) return;
+    if (mode === 'group'   && !m.isGroup && !isOwner) return;
+    if (mode === 'pm'      && m.isGroup  && !isOwner) return;
   }
 
   let meta = null, isAdmin = false, isBotAdmin = false;
@@ -215,15 +184,14 @@ module.exports = async (sock, m) => {
       meta = groupMetaCache.has(m.chat)
         ? groupMetaCache.get(m.chat)
         : await sock.groupMetadata(m.chat).catch(() => null);
-
       if (meta) {
         groupMetaCache.set(m.chat, meta);
         if (groupMetaCache.size > 30) groupMetaCache.delete(groupMetaCache.keys().next().value);
         const admins = meta.participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin').map(p => p.id);
-        const sNum = sender?.split('@')[0] || '';
-        const bNum = sock.user?.id?.split(':')[0] || '';
-        isAdmin = admins.some(a => a.split('@')[0] === sNum);
-        isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
+        const sNum   = sender?.split('@')[0] || '';
+        const bNum   = sock.user?.id?.split(':')[0] || '';
+        isAdmin      = admins.some(a => a.split('@')[0] === sNum);
+        isBotAdmin   = admins.some(a => a.split('@')[0] === bNum);
       }
     } catch (_) {}
   }
@@ -235,16 +203,16 @@ module.exports = async (sock, m) => {
       groupMetaCache.set(m.chat, meta);
       if (groupMetaCache.size > 30) groupMetaCache.delete(groupMetaCache.keys().next().value);
       const admins = meta.participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin').map(p => p.id);
-      const sNum = sender?.split('@')[0] || '';
-      const bNum = sock.user?.id?.split(':')[0] || '';
-      isAdmin = admins.some(a => a.split('@')[0] === sNum);
-      isBotAdmin = admins.some(a => a.split('@')[0] === bNum);
+      const sNum   = sender?.split('@')[0] || '';
+      const bNum   = sock.user?.id?.split(':')[0] || '';
+      isAdmin      = admins.some(a => a.split('@')[0] === sNum);
+      isBotAdmin   = admins.some(a => a.split('@')[0] === bNum);
     } catch (_) {}
   };
 
   const ctx = {
     command: null, args: [], text: body,
-    prefix: getPrefix(body) || prefixes[0],
+    prefix:  getPrefix(body) || prefixes[0],
     isOwner, isSudo: isSudoUser, isCreator: isFromMe,
     isAdmin, isBotAdmin, isGroup: m.isGroup,
     sender,
@@ -254,10 +222,11 @@ module.exports = async (sock, m) => {
     groupMetadata: meta,
     getGroupMetadata: getMeta,
     reply: (txt) => {
-      if (!txt || typeof txt !== 'string') return Promise.resolve();
-      if (txt.trim() === '' || txt === '_' || txt === '*') return Promise.resolve();
+      if (txt === null || txt === undefined) return Promise.resolve();
+      if (typeof txt === 'string' && !txt.trim()) return Promise.resolve();
+      if (Buffer.isBuffer(txt) && txt.length === 0) return Promise.resolve();
       try {
-        return sock.sendMessage(m.chat, { text: txt.trim() }, { quoted: m });
+        return sock.sendMessage(m.chat, { text: typeof txt === 'string' ? txt.trim() : txt }, { quoted: m });
       } catch { return Promise.resolve(); }
     },
     ownerNumbers: sudoList, config,
@@ -267,52 +236,29 @@ module.exports = async (sock, m) => {
 
   loader.autoReveal(sock, m);
 
-  // ── STICKER BOND HANDLER ─────────────────────────────────────────
-  // Check for sticker in message or quoted message
-  let stickerMsg = null;
-  
-  // Direct sticker
+  // ── Sticker bond handler ─────────────────────────────────────────
   if (m.message?.stickerMessage) {
-    stickerMsg = m.message.stickerMessage;
-  }
-  // Sticker in m.msg (from smsg)
-  else if (m.msg?.stickerMessage) {
-    stickerMsg = m.msg.stickerMessage;
-  }
-  // Sticker in quoted message
-  else if (m.quoted?.message?.stickerMessage) {
-    stickerMsg = m.quoted.message.stickerMessage;
-  }
-  // Sticker in extendedTextMessage contextInfo
-  else if (m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage) {
-    stickerMsg = m.message.extendedTextMessage.contextInfo.quotedMessage.stickerMessage;
-  }
+    // Use the sticker's own message ID as key — stable across all contexts
+    const stickerMsgId = m.key?.id;
 
-  if (stickerMsg) {
-    const fp = getStickerFingerprint(stickerMsg);
-    
-    if (fp) {
-      const bonds = readBonds();
-      
-      if (bonds[fp]) {
-        const bondCommand = bonds[fp].trim();
-        let cmd = bondCommand.toLowerCase();
-        
-        // Remove prefix if present
-        for (const p of prefixes) {
-          if (cmd.startsWith(p)) {
-            cmd = cmd.slice(p.length);
-            break;
-          }
+    if (stickerMsgId) {
+      const bonds = readBonds(); // always fresh from disk
+      if (bonds[stickerMsgId]) {
+        const parts = bonds[stickerMsgId].trim().split(/\s+/);
+        const cmd   = parts[0].toLowerCase();
+
+        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
+          if (!m.quoted) m.quoted = {};
+          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
         }
-        
+
         ctx.command = cmd;
-        ctx.args = [];
-        ctx.text = '';
-        
+        ctx.args    = parts.slice(1);
+        ctx.text    = parts.slice(1).join(' ');
         return loader.exec(cmd, sock, m, ctx);
       }
     }
+    return;
   }
 
   if (!body || !body.trim()) return;
@@ -324,12 +270,12 @@ module.exports = async (sock, m) => {
   }
 
   const parts = body.slice(pre.length).trim().split(/\s+/);
-  const cmd = parts[0]?.toLowerCase();
+  const cmd   = parts[0]?.toLowerCase();
   if (!cmd) return;
 
   ctx.command = cmd;
-  ctx.args = parts.slice(1);
-  ctx.text = parts.slice(1).join(' ');
+  ctx.args    = parts.slice(1);
+  ctx.text    = parts.slice(1).join(' ');
 
   loader.exec(cmd, sock, m, ctx);
 };
