@@ -30,10 +30,11 @@ global.saveDisabledCommands = () => {
 
 loadDisabled();
 
+const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
+
 const readBonds = () => {
   try {
-    const file = path.join(DATABASE_DIR, 'sticker_bonds.json');
-    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (fs.existsSync(BOND_FILE)) return JSON.parse(fs.readFileSync(BOND_FILE, 'utf8'));
   } catch (e) {}
   return {};
 };
@@ -156,21 +157,6 @@ function getStickerFingerprint(stickerMsg) {
   );
 }
 
-function extractSticker(message, isQuoted = false) {
-  if (isQuoted) {
-    return (
-      message.quoted?.message?.stickerMessage ||
-      message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage ||
-      null
-    );
-  }
-  return (
-    message.message?.stickerMessage ||
-    message.msg ||
-    null
-  );
-}
-
 module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
   if (m.key.remoteJid === 'status@broadcast') return;
@@ -281,33 +267,50 @@ module.exports = async (sock, m) => {
 
   loader.autoReveal(sock, m);
 
-  const stickerMsg = extractSticker(m, false);
+  // ── STICKER BOND HANDLER ─────────────────────────────────────────
+  // Check for sticker in message or quoted message
+  let stickerMsg = null;
+  
+  // Direct sticker
+  if (m.message?.stickerMessage) {
+    stickerMsg = m.message.stickerMessage;
+  }
+  // Sticker in m.msg (from smsg)
+  else if (m.msg?.stickerMessage) {
+    stickerMsg = m.msg.stickerMessage;
+  }
+  // Sticker in quoted message
+  else if (m.quoted?.message?.stickerMessage) {
+    stickerMsg = m.quoted.message.stickerMessage;
+  }
+  // Sticker in extendedTextMessage contextInfo
+  else if (m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage) {
+    stickerMsg = m.message.extendedTextMessage.contextInfo.quotedMessage.stickerMessage;
+  }
 
   if (stickerMsg) {
     const fp = getStickerFingerprint(stickerMsg);
+    
     if (fp) {
       const bonds = readBonds();
+      
       if (bonds[fp]) {
-        const parts = bonds[fp].trim().split(/\s+/);
-        const cmd = parts[0].toLowerCase();
-
-        if (m.message?.stickerMessage?.contextInfo?.quotedMessage) {
-          if (!m.quoted) m.quoted = {};
-          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
-        }
-
-        ctx.command = cmd;
-        ctx.args = parts.slice(1);
-        ctx.text = parts.slice(1).join(' ');
-
+        const bondCommand = bonds[fp].trim();
+        let cmd = bondCommand.toLowerCase();
+        
+        // Remove prefix if present
         for (const p of prefixes) {
-          if (ctx.command.startsWith(p)) {
-            ctx.command = ctx.command.slice(p.length);
+          if (cmd.startsWith(p)) {
+            cmd = cmd.slice(p.length);
             break;
           }
         }
-
-        return loader.exec(ctx.command, sock, m, ctx);
+        
+        ctx.command = cmd;
+        ctx.args = [];
+        ctx.text = '';
+        
+        return loader.exec(cmd, sock, m, ctx);
       }
     }
   }
