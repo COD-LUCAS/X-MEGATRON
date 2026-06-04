@@ -166,6 +166,10 @@ module.exports = async (sock, m) => {
 
   const isFromMe = m.fromMe === true;
 
+  // ── BLOCK: Drop bot's own empty/system messages immediately ──────
+  // These cause the null timestamp spam in groups
+  if (isFromMe && !m.message?.conversation && !m.message?.extendedTextMessage?.text) return;
+
   // ── FIX: Safe body extraction — always a string ──
   const body = (
     m.message?.conversation?.trim() ||
@@ -309,15 +313,6 @@ module.exports = async (sock, m) => {
 
   loader.autoReveal(sock, m);
 
-  // ── Group moderation — runs on EVERY group message, before anything else ──
-  if (m.isGroup && !isFromMe) {
-    for (const p of loader.plugins) {
-      if (p.groupFilter) {
-        try { await p.groupFilter(sock, m, ctx); } catch (_) {}
-      }
-    }
-  }
-
   // ── Sticker bond handler ────────────────────────────────────────
   if (m.message?.stickerMessage) {
     let hash = null;
@@ -351,7 +346,7 @@ module.exports = async (sock, m) => {
   const pre = getPrefix(body);
 
   if (!pre) {
-    loader.onText(sock, m, ctx);
+    if (!isFromMe) loader.onText(sock, m, ctx);
     return;
   }
 
