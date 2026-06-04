@@ -1,7 +1,9 @@
 /**
  * plugins/antispam.js
- * Commands: .antilink .antispam .antibadword .antidelete
- * All logic lives in library/antifunction.js
+ * Commands: .antilink .antispam .antibadword .antidelete .antifake
+ *
+ * Uses handleText hook so loader calls it on EVERY message.
+ * All protection logic lives in library/antifunction.js
  */
 
 'use strict';
@@ -10,15 +12,21 @@ const isAdminHelper = require('../library/isAdmin');
 const AF = require('../library/antifunction');
 
 module.exports = {
-  command: ['antilink', 'antispam', 'antibadword', 'antidelete'],
+  command: ['antilink', 'antispam', 'antibadword', 'antidelete', 'antifake'],
   category: 'group',
   desc: 'Group protection commands',
+
+  // ── handleText fires on every message — runs protection ────────────
+  async handleText(sock, m, ctx) {
+    if (!m.isGroup || m.fromMe || !m.sender) return;
+    AF.runGroupProtection(sock, m).catch(() => {});
+  },
 
   async execute(sock, m, ctx) {
     const { command, args, reply, isOwner, prefix } = ctx;
     const sub = args[0]?.toLowerCase();
 
-    // ── .antilink
+    // ── .antilink ──────────────────────────────────────────────────
     if (command === 'antilink') {
       if (!m.isGroup) return reply('_group only command_');
       const { isSenderAdmin } = await isAdminHelper(sock, m.chat, m.sender);
@@ -29,12 +37,12 @@ module.exports = {
       if (!sub) return reply(
         '_antilink: ' + (cfg?.enabled ? 'on' : 'off') + '_\n' +
         '_action: ' + (cfg?.action || 'not set') + '_\n' +
-        '_custom domains: ' + ((cfg?.domains || []).join(', ') || 'none') + '_\n\n' +
+        '_allowed domains: ' + ((cfg?.domains || []).join(', ') || 'none - all links blocked') + '_\n\n' +
         '_' + prefix + 'antilink on_\n' +
         '_' + prefix + 'antilink off_\n' +
         '_' + prefix + 'antilink set delete|warn|kick_\n' +
-        '_' + prefix + 'antilink set domain.com  ← block specific domain_\n' +
-        '_' + prefix + 'antilink domains  ← list blocked domains_\n' +
+        '_' + prefix + 'antilink allow domain.com  ← allow specific domain_\n' +
+        '_' + prefix + 'antilink domains  ← list allowed domains_\n' +
         '_' + prefix + 'antilink remove domain.com_'
       );
 
@@ -43,22 +51,26 @@ module.exports = {
 
       if (sub === 'set') {
         const val = args[1]?.toLowerCase();
-        if (!val) return reply('_usage: .antilink set delete|warn|kick  OR  .antilink set domain.com_');
-        if (['delete','warn','kick'].includes(val)) {
-          AF.setAntilink(m.chat, true, val, cfg?.domains || []);
-          return reply('_antilink on - action: ' + val + '_');
-        }
+        if (!val) return reply('_usage: .antilink set delete|warn|kick_');
+        if (!['delete','warn','kick'].includes(val)) return reply('_options: delete | warn | kick_');
+        AF.setAntilink(m.chat, true, val, cfg?.domains || []);
+        return reply('_antilink on - action: ' + val + '_');
+      }
+
+      if (sub === 'allow') {
+        const val = args[1]?.toLowerCase();
+        if (!val) return reply('_usage: .antilink allow domain.com_');
         const domains = cfg?.domains || [];
         if (!domains.includes(val)) domains.push(val);
         AF.setAntilink(m.chat, cfg?.enabled ?? true, cfg?.action || 'delete', domains);
-        return reply('_domain added: ' + val + '_');
+        return reply('_allowed domain added: ' + val + '_\n_links from ' + val + ' will not be blocked_');
       }
 
       if (sub === 'domains') {
         const domains = cfg?.domains || [];
         return reply(domains.length
-          ? '_blocked domains_\n' + domains.map((d, i) => '_' + (i+1) + '. ' + d + '_').join('\n')
-          : '_no custom domains - all links detected by default_'
+          ? '_allowed domains (these links will pass)_\n' + domains.map((d, i) => '_' + (i+1) + '. ' + d + '_').join('\n')
+          : '_no allowed domains - all links are blocked_'
         );
       }
 
@@ -69,13 +81,13 @@ module.exports = {
         if (idx === -1) return reply('_domain not found: ' + val + '_');
         domains.splice(idx, 1);
         AF.setAntilink(m.chat, cfg?.enabled ?? true, cfg?.action || 'delete', domains);
-        return reply('_removed domain: ' + val + '_');
+        return reply('_removed allowed domain: ' + val + '_');
       }
 
-      return reply('_options: on | off | set delete|warn|kick | set <domain> | domains | remove <domain>_');
+      return reply('_options: on | off | set delete|warn|kick | allow <domain> | domains | remove <domain>_');
     }
 
-    // ── .antispam
+    // ── .antispam ──────────────────────────────────────────────────
     if (command === 'antispam') {
       if (!m.isGroup) return reply('_group only command_');
       const { isSenderAdmin } = await isAdminHelper(sock, m.chat, m.sender);
@@ -102,7 +114,7 @@ module.exports = {
       return reply('_options: on | off | set <number>_');
     }
 
-    // ── .antibadword
+    // ── .antibadword ───────────────────────────────────────────────
     if (command === 'antibadword') {
       if (!m.isGroup) return reply('_group only command_');
       const { isSenderAdmin } = await isAdminHelper(sock, m.chat, m.sender);
@@ -151,12 +163,10 @@ module.exports = {
       return reply('_options: on | off | set | add | remove | list_');
     }
 
-    // ── .antidelete
+    // ── .antidelete ────────────────────────────────────────────────
     if (command === 'antidelete') {
       if (!isOwner) return reply('_owner only command_');
-
       const cfg = AF.loadAdConfig();
-
       if (!sub) return reply(
         '_antidelete: ' + (cfg.enabled ? 'on' : 'off') + '_\n' +
         '_target: ' + (cfg.target || 'group') + '_\n\n' +
@@ -166,25 +176,37 @@ module.exports = {
         '_' + prefix + 'antidelete target owner_\n' +
         '_' + prefix + 'antidelete target <number>_'
       );
-
       if (sub === 'on')  { cfg.enabled = true;  AF.saveAdConfig(cfg); return reply('_antidelete on_'); }
       if (sub === 'off') { cfg.enabled = false;  AF.saveAdConfig(cfg); return reply('_antidelete off_'); }
-
       if (sub === 'target') {
         const val = args[1]?.toLowerCase()?.trim();
         if (!val) return reply('_usage: .antidelete target group | owner | <number>_');
-        if (val === 'group' || val === 'owner') {
-          cfg.target = val;
-        } else {
-          const num = val.replace(/\D/g, '');
-          if (num.length < 7) return reply('_invalid number_');
-          cfg.target = num + '@s.whatsapp.net';
-        }
+        if (val === 'group' || val === 'owner') { cfg.target = val; }
+        else { const num = val.replace(/\D/g,''); if (num.length < 7) return reply('_invalid number_'); cfg.target = num + '@s.whatsapp.net'; }
         AF.saveAdConfig(cfg);
         return reply('_antidelete target: ' + cfg.target + '_');
       }
-
       return reply('_options: on | off | target group|owner|<number>_');
+    }
+
+    // ── .antifake ──────────────────────────────────────────────────
+    if (command === 'antifake') {
+      if (!m.isGroup) return reply('_group only command_');
+      const { isSenderAdmin } = await isAdminHelper(sock, m.chat, m.sender);
+      if (!isSenderAdmin && !isOwner) return reply('_group admins only_');
+
+      const cfg = AF.getAntifake(m.chat);
+
+      if (!sub) return reply(
+        '_antifake: ' + (cfg?.enabled ? 'on' : 'off') + '_\n\n' +
+        '_Removes members with fake/virtual numbers_\n\n' +
+        '_' + prefix + 'antifake on_\n' +
+        '_' + prefix + 'antifake off_'
+      );
+
+      if (sub === 'on')  { AF.setAntifake(m.chat);    return reply('_antifake on - fake numbers will be removed_'); }
+      if (sub === 'off') { AF.removeAntifake(m.chat); return reply('_antifake off_'); }
+      return reply('_options: on | off_');
     }
   }
 };
