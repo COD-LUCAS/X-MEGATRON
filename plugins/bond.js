@@ -14,23 +14,30 @@ const readBonds  = () => {
 };
 const writeBonds = (b) => { try { fs.writeFileSync(BOND_FILE, JSON.stringify(b, null, 2)); } catch (e) {} };
 
-// Get the quoted sticker's message ID — the only 100% stable identifier
-function getQuotedStickerInfo(m) {
-  // Method 1: m.quoted set by smsg/manager
-  if (m.quoted?.message?.stickerMessage) {
-    return {
-      id:   m.quoted.key?.id || null,
-      type: 'sticker'
-    };
+// Get the message ID of the quoted sticker
+// stanzaId = the original message's ID, always stable
+function getQuotedStickerId(m) {
+  // Path 1: extendedTextMessage contextInfo (most common — .bond ping while replying)
+  const ctxInfo = m.message?.extendedTextMessage?.contextInfo;
+  if (ctxInfo?.stanzaId && ctxInfo?.quotedMessage?.stickerMessage) {
+    return ctxInfo.stanzaId;
   }
-  // Method 2: raw contextInfo
-  const ctx = m.message?.extendedTextMessage?.contextInfo;
-  if (ctx?.quotedMessage?.stickerMessage) {
-    return {
-      id:   ctx.stanzaId || null,
-      type: 'sticker'
-    };
+
+  // Path 2: smsg sets m.quoted with the key
+  if (m.quoted?.message?.stickerMessage && m.quoted?.key?.id) {
+    return m.quoted.key.id;
   }
+
+  // Path 3: quoted stanza from other message types
+  const ctx2 =
+    m.message?.imageMessage?.contextInfo  ||
+    m.message?.videoMessage?.contextInfo  ||
+    m.message?.audioMessage?.contextInfo  ||
+    null;
+  if (ctx2?.stanzaId && ctx2?.quotedMessage?.stickerMessage) {
+    return ctx2.stanzaId;
+  }
+
   return null;
 }
 
@@ -48,8 +55,8 @@ module.exports = {
         `_reply to a sticker:_\n*.bond <command>*\n_example:_ *.bond ping*`
       );
 
-      const info = getQuotedStickerInfo(m);
-      if (!info?.id) return reply('_reply to a sticker_');
+      const id = getQuotedStickerId(m);
+      if (!id) return reply('_reply to a sticker — could not read sticker ID_');
 
       let targetCmd = text.trim();
       const allPrefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
@@ -59,7 +66,7 @@ module.exports = {
       if (!targetCmd) return reply('_invalid command_');
 
       const bonds = readBonds();
-      bonds[info.id] = targetCmd;
+      bonds[id] = targetCmd;
       writeBonds(bonds);
 
       if (global.pluginLoader) global.pluginLoader.reload();
@@ -78,11 +85,11 @@ module.exports = {
       const bonds = readBonds();
 
       // Reply to sticker
-      const info = getQuotedStickerInfo(m);
-      if (info?.id) {
-        if (!bonds[info.id]) return reply('_sticker not bonded_');
-        const removed = bonds[info.id];
-        delete bonds[info.id];
+      const id = getQuotedStickerId(m);
+      if (id) {
+        if (!bonds[id]) return reply('_sticker not bonded_');
+        const removed = bonds[id];
+        delete bonds[id];
         writeBonds(bonds);
         if (global.pluginLoader) global.pluginLoader.reload();
         return reply(`_unbonded_ *${prefix}${removed}*`);
