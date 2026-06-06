@@ -208,6 +208,14 @@ module.exports = {
     const code = body.slice(1).trim();
     if (!code) return;
 
+    // Plugin code → install it
+    if (code.includes('module.exports') && code.includes('execute')) {
+      ctx.text    = code;
+      ctx.command = 'code';
+      return this.execute(sock, m, ctx);
+    }
+
+    // Regular JS → eval it
     ctx.text    = code;
     ctx.command = 'eval';
     return this.execute(sock, m, ctx);
