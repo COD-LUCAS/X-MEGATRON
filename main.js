@@ -110,7 +110,7 @@ class Loader {
   }
 
   onText(sock, m, ctx) {
-    if (!m.body?.trim() || !ctx.text?.trim()) return;
+    if (!m.body?.trim()) return;
     for (const p of this.plugins) {
       if (!p.onText && !p.handleText) continue;
       if (p.handleText) p.handleText(sock, m, ctx);
@@ -126,6 +126,28 @@ class Loader {
 const loader = new Loader();
 global.pluginLoader = loader;
 const groupMetaCache = new Map();
+
+// ── Sticker bond key extraction ───────────────────────────────────────
+// Uses the sticker's original message ID (stanzaId) — stable across all contexts
+function getBondKey(m) {
+  // From contextInfo when replying to a sticker
+  const ctxInfo =
+    m.message?.extendedTextMessage?.contextInfo ||
+    m.message?.imageMessage?.contextInfo        ||
+    m.message?.videoMessage?.contextInfo        ||
+    null;
+
+  if (ctxInfo?.stanzaId && ctxInfo?.quotedMessage?.stickerMessage) {
+    return ctxInfo.stanzaId;
+  }
+
+  // Direct sticker send — use its own message ID
+  if (m.message?.stickerMessage) {
+    return m.key?.id || null;
+  }
+
+  return null;
+}
 
 module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
@@ -156,9 +178,7 @@ module.exports = async (sock, m) => {
   try {
     const { isBanned } = require('./plugins/ban');
     if (isBanned(m.chat)) {
-      if (!isFromMe) {
-        if (!isSudo(sender, loadSudo())) return;
-      }
+      if (!isFromMe && !isSudo(sender, loadSudo())) return;
       const hasPrefix = prefixes.some(p => body.startsWith(p));
       if (!hasPrefix) return;
       const cmd = body.slice(prefixes.find(p => body.startsWith(p))?.length || 1).trim().split(/\s+/)[0]?.toLowerCase();
@@ -238,20 +258,16 @@ module.exports = async (sock, m) => {
 
   // ── Sticker bond handler ─────────────────────────────────────────
   if (m.message?.stickerMessage) {
-    // Use the sticker's own message ID as key — stable across all contexts
-    const stickerMsgId = m.key?.id;
-
-    if (stickerMsgId) {
-      const bonds = readBonds(); // always fresh from disk
-      if (bonds[stickerMsgId]) {
-        const parts = bonds[stickerMsgId].trim().split(/\s+/);
+    const bondKey = m.key?.id;
+    if (bondKey) {
+      const bonds = readBonds();
+      if (bonds[bondKey]) {
+        const parts = bonds[bondKey].trim().split(/\s+/);
         const cmd   = parts[0].toLowerCase();
-
         if (m.message.stickerMessage.contextInfo?.quotedMessage) {
           if (!m.quoted) m.quoted = {};
           m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
         }
-
         ctx.command = cmd;
         ctx.args    = parts.slice(1);
         ctx.text    = parts.slice(1).join(' ');
@@ -263,8 +279,18 @@ module.exports = async (sock, m) => {
 
   if (!body || !body.trim()) return;
 
+  // ── FIX: > prefix works for BOTH fromMe and non-fromMe ──────────
+  // main.js was blocking fromMe messages from reaching onText/handleText.
+  // Owner uses bot from their own number so fromMe=true — > would never fire.
+  // Now we check > BEFORE the fromMe gate for onText.
+  if (body.trimStart().startsWith('>') && isOwner) {
+    loader.onText(sock, m, ctx);
+    return;
+  }
+
   const pre = getPrefix(body);
   if (!pre) {
+    // Only call onText for non-fromMe (avoids loop on bot's own messages)
     if (!isFromMe) loader.onText(sock, m, ctx);
     return;
   }
