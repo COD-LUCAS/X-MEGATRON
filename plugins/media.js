@@ -2,7 +2,7 @@
 
 const axios = require('axios');
 
-const API_BASE = 'https://xeon-api.koyeb.app';
+const API_BASE = 'https://xeon-apis.onrender.com';
 
 const react = (sock, m, emoji) =>
   sock.sendMessage(m.chat, { react: { text: emoji, key: m.key } }).catch(() => {});
