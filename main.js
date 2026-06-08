@@ -18,13 +18,9 @@ const loadDisabled = () => {
     if (fs.existsSync(file)) global.disabledCommands = new Set(JSON.parse(fs.readFileSync(file, 'utf8')));
   } catch (e) {}
 };
-
 global.saveDisabledCommands = () => {
-  try {
-    fs.writeFileSync(path.join(DATABASE_DIR, 'disabled_commands.json'), JSON.stringify([...global.disabledCommands]));
-  } catch (e) {}
+  try { fs.writeFileSync(path.join(DATABASE_DIR, 'disabled_commands.json'), JSON.stringify([...global.disabledCommands])); } catch (e) {}
 };
-
 loadDisabled();
 
 const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
@@ -38,8 +34,8 @@ const loadSudo = () => {
   const env    = (process.env.SUDO  || '').split(',').map(v => v.trim()).filter(Boolean);
   let file = [];
   try {
-    const sudoFile = path.join(DATABASE_DIR, 'sudo.json');
-    if (fs.existsSync(sudoFile)) file = JSON.parse(fs.readFileSync(sudoFile, 'utf8'));
+    const f = path.join(DATABASE_DIR, 'sudo.json');
+    if (fs.existsSync(f)) file = JSON.parse(fs.readFileSync(f, 'utf8'));
   } catch (e) {}
   return [...new Set([...owners, ...env, ...file])];
 };
@@ -69,6 +65,19 @@ const saveGroupEventsDB = (data) => {
   try { fs.writeFileSync(GROUP_EVENTS_DB, JSON.stringify(data, null, 2)); } catch (_) {}
 };
 
+function getStickerKey(stickerMsg) {
+  if (!stickerMsg) return null;
+  const raw = stickerMsg.fileEncSha256 || stickerMsg.fileSha256;
+  if (!raw) return null;
+  try {
+    if (Buffer.isBuffer(raw))               return raw.toString('hex');
+    if (raw instanceof Uint8Array)          return Buffer.from(raw).toString('hex');
+    if (raw?.type === 'Buffer' && raw.data) return Buffer.from(raw.data).toString('hex');
+    if (typeof raw === 'string')            return raw;
+  } catch (_) {}
+  return null;
+}
+
 class Loader {
   constructor() { this.plugins = []; this.map = new Map(); this.load(); }
 
@@ -81,7 +90,7 @@ class Loader {
         try {
           delete require.cache[require.resolve(path.join(dir, file))];
           const p = require(path.join(dir, file));
-          if (!p?.command && !p?.onText && !p?.handleText) continue;
+          if (!p?.command && !p?.onText && !p?.handleText && !p?.groupFilter) continue;
           this.plugins.push(p);
           if (p.command) {
             const cmds = Array.isArray(p.command) ? p.command : [p.command];
@@ -118,6 +127,13 @@ class Loader {
     }
   }
 
+  groupFilter(sock, m, ctx) {
+    for (const p of this.plugins) {
+      if (!p.groupFilter) continue;
+      try { p.groupFilter(sock, m, ctx); } catch (_) {}
+    }
+  }
+
   autoReveal(sock, m) {
     for (const p of this.plugins) { if (p.autoReveal) p.autoReveal(sock, m); }
   }
@@ -126,28 +142,6 @@ class Loader {
 const loader = new Loader();
 global.pluginLoader = loader;
 const groupMetaCache = new Map();
-
-// ── Sticker bond key extraction ───────────────────────────────────────
-// Uses the sticker's original message ID (stanzaId) — stable across all contexts
-function getBondKey(m) {
-  // From contextInfo when replying to a sticker
-  const ctxInfo =
-    m.message?.extendedTextMessage?.contextInfo ||
-    m.message?.imageMessage?.contextInfo        ||
-    m.message?.videoMessage?.contextInfo        ||
-    null;
-
-  if (ctxInfo?.stanzaId && ctxInfo?.quotedMessage?.stickerMessage) {
-    return ctxInfo.stanzaId;
-  }
-
-  // Direct sticker send — use its own message ID
-  if (m.message?.stickerMessage) {
-    return m.key?.id || null;
-  }
-
-  return null;
-}
 
 module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
@@ -256,17 +250,22 @@ module.exports = async (sock, m) => {
 
   loader.autoReveal(sock, m);
 
-  // ── Sticker bond handler ─────────────────────────────────────────
+  if (m.isGroup && !isFromMe) {
+    loader.groupFilter(sock, m, ctx);
+  }
+
   if (m.message?.stickerMessage) {
-    const bondKey = m.key?.id;
+    const stickerMsg = m.message.stickerMessage;
+    const bondKey    = getStickerKey(stickerMsg);
+
     if (bondKey) {
       const bonds = readBonds();
       if (bonds[bondKey]) {
         const parts = bonds[bondKey].trim().split(/\s+/);
         const cmd   = parts[0].toLowerCase();
-        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
+        if (stickerMsg.contextInfo?.quotedMessage) {
           if (!m.quoted) m.quoted = {};
-          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
+          m.quoted.message = stickerMsg.contextInfo.quotedMessage;
         }
         ctx.command = cmd;
         ctx.args    = parts.slice(1);
@@ -279,10 +278,6 @@ module.exports = async (sock, m) => {
 
   if (!body || !body.trim()) return;
 
-  // ── FIX: > prefix works for BOTH fromMe and non-fromMe ──────────
-  // main.js was blocking fromMe messages from reaching onText/handleText.
-  // Owner uses bot from their own number so fromMe=true — > would never fire.
-  // Now we check > BEFORE the fromMe gate for onText.
   if (body.trimStart().startsWith('>') && isOwner) {
     loader.onText(sock, m, ctx);
     return;
@@ -290,8 +285,10 @@ module.exports = async (sock, m) => {
 
   const pre = getPrefix(body);
   if (!pre) {
-    // Only call onText for non-fromMe (avoids loop on bot's own messages)
-    if (!isFromMe) loader.onText(sock, m, ctx);
+    // FIX: Allow owner's messages (even fromMe) to reach onText for fancy.js number replies
+    if (isOwner || !isFromMe) {
+      loader.onText(sock, m, ctx);
+    }
     return;
   }
 
