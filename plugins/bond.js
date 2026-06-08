@@ -1,3 +1,4 @@
+
 'use strict';
 
 const fs   = require('fs');
@@ -14,30 +15,33 @@ const readBonds  = () => {
 };
 const writeBonds = (b) => { try { fs.writeFileSync(BOND_FILE, JSON.stringify(b, null, 2)); } catch (e) {} };
 
-// Get the message ID of the quoted sticker
-// stanzaId = the original message's ID, always stable
-function getQuotedStickerId(m) {
-  // Path 1: extendedTextMessage contextInfo (most common — .bond ping while replying)
+// fileEncSha256 = AES-encrypted SHA256 of media content
+// IDENTICAL for the same sticker no matter who sends it or when
+// This is the ONLY reliable sticker identity key in Baileys
+function getStickerKey(stickerMsg) {
+  if (!stickerMsg) return null;
+  const raw = stickerMsg.fileEncSha256 || stickerMsg.fileSha256;
+  if (!raw) return null;
+  try {
+    if (Buffer.isBuffer(raw))               return raw.toString('hex');
+    if (raw instanceof Uint8Array)          return Buffer.from(raw).toString('hex');
+    if (raw?.type === 'Buffer' && raw.data) return Buffer.from(raw.data).toString('hex');
+    if (typeof raw === 'string')            return raw;
+  } catch (_) {}
+  return null;
+}
+
+// Extract sticker message from quoted context
+function getQuotedSticker(m) {
+  // Raw contextInfo from Baileys (most reliable)
   const ctxInfo = m.message?.extendedTextMessage?.contextInfo;
-  if (ctxInfo?.stanzaId && ctxInfo?.quotedMessage?.stickerMessage) {
-    return ctxInfo.stanzaId;
+  if (ctxInfo?.quotedMessage?.stickerMessage) {
+    return ctxInfo.quotedMessage.stickerMessage;
   }
-
-  // Path 2: smsg sets m.quoted with the key
-  if (m.quoted?.message?.stickerMessage && m.quoted?.key?.id) {
-    return m.quoted.key.id;
+  // smsg sets m.quoted.message
+  if (m.quoted?.message?.stickerMessage) {
+    return m.quoted.message.stickerMessage;
   }
-
-  // Path 3: quoted stanza from other message types
-  const ctx2 =
-    m.message?.imageMessage?.contextInfo  ||
-    m.message?.videoMessage?.contextInfo  ||
-    m.message?.audioMessage?.contextInfo  ||
-    null;
-  if (ctx2?.stanzaId && ctx2?.quotedMessage?.stickerMessage) {
-    return ctx2.stanzaId;
-  }
-
   return null;
 }
 
@@ -55,18 +59,21 @@ module.exports = {
         `_reply to a sticker:_\n*.bond <command>*\n_example:_ *.bond ping*`
       );
 
-      const id = getQuotedStickerId(m);
-      if (!id) return reply('_reply to a sticker — could not read sticker ID_');
+      const sticker = getQuotedSticker(m);
+      if (!sticker) return reply('_reply to a sticker_');
+
+      const key = getStickerKey(sticker);
+      if (!key) return reply('_could not read sticker — try forwarding it fresh_');
 
       let targetCmd = text.trim();
-      const allPrefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
-      for (const p of allPrefixes) {
+      const allPfx = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
+      for (const p of allPfx) {
         if (targetCmd.startsWith(p)) { targetCmd = targetCmd.slice(p.length).trim(); break; }
       }
       if (!targetCmd) return reply('_invalid command_');
 
       const bonds = readBonds();
-      bonds[id] = targetCmd;
+      bonds[key] = targetCmd;
       writeBonds(bonds);
 
       if (global.pluginLoader) global.pluginLoader.reload();
@@ -85,11 +92,12 @@ module.exports = {
       const bonds = readBonds();
 
       // Reply to sticker
-      const id = getQuotedStickerId(m);
-      if (id) {
-        if (!bonds[id]) return reply('_sticker not bonded_');
-        const removed = bonds[id];
-        delete bonds[id];
+      const sticker = getQuotedSticker(m);
+      if (sticker) {
+        const key = getStickerKey(sticker);
+        if (!key || !bonds[key]) return reply('_sticker not bonded_');
+        const removed = bonds[key];
+        delete bonds[key];
         writeBonds(bonds);
         if (global.pluginLoader) global.pluginLoader.reload();
         return reply(`_unbonded_ *${prefix}${removed}*`);
@@ -98,8 +106,8 @@ module.exports = {
       // By command name
       if (args[0]) {
         let targetCmd = args[0].trim();
-        const allPrefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
-        for (const p of allPrefixes) {
+        const allPfx = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
+        for (const p of allPfx) {
           if (targetCmd.startsWith(p)) { targetCmd = targetCmd.slice(p.length).trim(); break; }
         }
         const entry = Object.entries(bonds).find(([, cmd]) => cmd === targetCmd);
