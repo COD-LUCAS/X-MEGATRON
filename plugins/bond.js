@@ -1,4 +1,3 @@
-
 'use strict';
 
 const fs   = require('fs');
@@ -15,12 +14,8 @@ const readBonds  = () => {
 };
 const writeBonds = (b) => { try { fs.writeFileSync(BOND_FILE, JSON.stringify(b, null, 2)); } catch (e) {} };
 
-// fileEncSha256 = AES-encrypted SHA256 of media content
-// IDENTICAL for the same sticker no matter who sends it or when
-// This is the ONLY reliable sticker identity key in Baileys
-function getStickerKey(stickerMsg) {
-  if (!stickerMsg) return null;
-  const raw = stickerMsg.fileEncSha256 || stickerMsg.fileSha256;
+// Convert any Baileys byte format to hex string
+function toHex(raw) {
   if (!raw) return null;
   try {
     if (Buffer.isBuffer(raw))               return raw.toString('hex');
@@ -31,17 +26,33 @@ function getStickerKey(stickerMsg) {
   return null;
 }
 
-// Extract sticker message from quoted context
-function getQuotedSticker(m) {
-  // Raw contextInfo from Baileys (most reliable)
-  const ctxInfo = m.message?.extendedTextMessage?.contextInfo;
-  if (ctxInfo?.quotedMessage?.stickerMessage) {
-    return ctxInfo.quotedMessage.stickerMessage;
-  }
-  // smsg sets m.quoted.message
-  if (m.quoted?.message?.stickerMessage) {
-    return m.quoted.message.stickerMessage;
-  }
+// Get fileEncSha256 from a stickerMessage object
+// This is the AES-encrypted content hash — identical for same sticker, always
+function getStickerHash(stickerMsg) {
+  if (!stickerMsg) return null;
+  // Try fileEncSha256 first (most stable), then fileSha256 as fallback
+  return toHex(stickerMsg.fileEncSha256) || toHex(stickerMsg.fileSha256) || null;
+}
+
+// Extract the quoted stickerMessage from ALL possible locations smsg/Baileys sets it
+function getQuotedStickerMsg(m) {
+  // Most common: user replied to a sticker with .bond ping
+  // Baileys puts quoted content in extendedTextMessage.contextInfo
+  const ext = m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage;
+  if (ext) return ext;
+
+  // smsg sets m.quoted.message = the quoted message object
+  const q = m.quoted?.message?.stickerMessage;
+  if (q) return q;
+
+  // Fallback: direct contextInfo on any message type
+  const ctxMsg =
+    m.message?.imageMessage?.contextInfo?.quotedMessage?.stickerMessage ||
+    m.message?.videoMessage?.contextInfo?.quotedMessage?.stickerMessage ||
+    m.message?.audioMessage?.contextInfo?.quotedMessage?.stickerMessage ||
+    null;
+  if (ctxMsg) return ctxMsg;
+
   return null;
 }
 
@@ -59,11 +70,11 @@ module.exports = {
         `_reply to a sticker:_\n*.bond <command>*\n_example:_ *.bond ping*`
       );
 
-      const sticker = getQuotedSticker(m);
-      if (!sticker) return reply('_reply to a sticker_');
+      const stickerMsg = getQuotedStickerMsg(m);
+      if (!stickerMsg) return reply('_reply to a sticker_');
 
-      const key = getStickerKey(sticker);
-      if (!key) return reply('_could not read sticker — try forwarding it fresh_');
+      const hash = getStickerHash(stickerMsg);
+      if (!hash) return reply('_could not read sticker hash — forward a fresh copy of the sticker_');
 
       let targetCmd = text.trim();
       const allPfx = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
@@ -73,9 +84,8 @@ module.exports = {
       if (!targetCmd) return reply('_invalid command_');
 
       const bonds = readBonds();
-      bonds[key] = targetCmd;
+      bonds[hash] = targetCmd;
       writeBonds(bonds);
-
       if (global.pluginLoader) global.pluginLoader.reload();
 
       await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } }).catch(() => {});
@@ -91,19 +101,19 @@ module.exports = {
 
       const bonds = readBonds();
 
-      // Reply to sticker
-      const sticker = getQuotedSticker(m);
-      if (sticker) {
-        const key = getStickerKey(sticker);
-        if (!key || !bonds[key]) return reply('_sticker not bonded_');
-        const removed = bonds[key];
-        delete bonds[key];
+      // Method 1: reply to the bonded sticker
+      const stickerMsg = getQuotedStickerMsg(m);
+      if (stickerMsg) {
+        const hash = getStickerHash(stickerMsg);
+        if (!hash || !bonds[hash]) return reply('_sticker not bonded_');
+        const removed = bonds[hash];
+        delete bonds[hash];
         writeBonds(bonds);
         if (global.pluginLoader) global.pluginLoader.reload();
         return reply(`_unbonded_ *${prefix}${removed}*`);
       }
 
-      // By command name
+      // Method 2: .unbond <commandname>
       if (args[0]) {
         let targetCmd = args[0].trim();
         const allPfx = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
