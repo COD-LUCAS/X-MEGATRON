@@ -6,7 +6,8 @@ const path = require('path');
 const DATABASE_DIR = path.join(__dirname, '..', 'database');
 if (!fs.existsSync(DATABASE_DIR)) fs.mkdirSync(DATABASE_DIR, { recursive: true });
 
-const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
+const BOND_FILE  = path.join(DATABASE_DIR, 'sticker_bonds.json');
+const DEBUG_FILE = path.join(DATABASE_DIR, 'bond_debug.json');
 
 const readBonds  = () => {
   try { if (fs.existsSync(BOND_FILE)) return JSON.parse(fs.readFileSync(BOND_FILE, 'utf8')); } catch (e) {}
@@ -14,7 +15,6 @@ const readBonds  = () => {
 };
 const writeBonds = (b) => { try { fs.writeFileSync(BOND_FILE, JSON.stringify(b, null, 2)); } catch (e) {} };
 
-// Convert any Baileys byte format to hex string
 function toHex(raw) {
   if (!raw) return null;
   try {
@@ -26,38 +26,46 @@ function toHex(raw) {
   return null;
 }
 
-// Get fileEncSha256 from a stickerMessage object
-// This is the AES-encrypted content hash — identical for same sticker, always
-function getStickerHash(stickerMsg) {
-  if (!stickerMsg) return null;
-  // Try fileEncSha256 first (most stable), then fileSha256 as fallback
-  return toHex(stickerMsg.fileEncSha256) || toHex(stickerMsg.fileSha256) || null;
+// Try EVERY possible hash from a sticker object — return first non-null
+function extractHash(stickerObj) {
+  if (!stickerObj) return null;
+  return (
+    toHex(stickerObj.fileEncSha256) ||
+    toHex(stickerObj.fileSha256)    ||
+    toHex(stickerObj.mediaKey)      ||
+    null
+  );
 }
 
-// Extract the quoted stickerMessage from ALL possible locations smsg/Baileys sets it
-function getQuotedStickerMsg(m) {
-  // Most common: user replied to a sticker with .bond ping
-  // Baileys puts quoted content in extendedTextMessage.contextInfo
+// Collect every possible stickerMessage object from the raw message
+function getAllStickerSources(m) {
+  const sources = {};
+
+  // When replying to a sticker with .bond ping
+  // Baileys puts the quoted message in multiple places:
+
+  // 1. extendedTextMessage contextInfo (most common)
   const ext = m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage;
-  if (ext) return ext;
+  if (ext) sources['extendedText.contextInfo'] = ext;
 
-  // smsg sets m.quoted.message = the quoted message object
-  const q = m.quoted?.message?.stickerMessage;
-  if (q) return q;
+  // 2. smsg sets m.quoted.message
+  if (m.quoted?.message?.stickerMessage) sources['m.quoted.message'] = m.quoted.message.stickerMessage;
 
-  // Fallback: direct contextInfo on any message type
-  const ctxMsg =
-    m.message?.imageMessage?.contextInfo?.quotedMessage?.stickerMessage ||
-    m.message?.videoMessage?.contextInfo?.quotedMessage?.stickerMessage ||
-    m.message?.audioMessage?.contextInfo?.quotedMessage?.stickerMessage ||
-    null;
-  if (ctxMsg) return ctxMsg;
+  // 3. smsg sets m.quoted directly as the inner type
+  if (m.quoted?.mtype === 'stickerMessage' && m.quoted?.msg) sources['m.quoted.msg'] = m.quoted.msg;
 
-  return null;
+  // 4. Raw message key contextInfo stanzaId approach
+  const ctx = m.message?.extendedTextMessage?.contextInfo;
+  if (ctx?.quotedMessage?.stickerMessage) sources['ctx.quotedMessage'] = ctx.quotedMessage.stickerMessage;
+
+  // 5. If user sent a sticker directly (for trigger testing)
+  if (m.message?.stickerMessage) sources['direct.stickerMessage'] = m.message.stickerMessage;
+
+  return sources;
 }
 
 module.exports = {
-  command:  ['bond', 'unbond', 'unbondall', 'listbond'],
+  command:  ['bond', 'unbond', 'unbondall', 'listbond', 'bonddebug'],
   owner:    true,
   category: 'app',
   desc:     'Bind stickers to commands',
@@ -65,16 +73,62 @@ module.exports = {
   async execute(sock, m, ctx) {
     const { command, args, text, reply, prefix } = ctx;
 
+    // ── .bonddebug — shows exactly what Baileys gives for the quoted sticker ──
+    if (command === 'bonddebug') {
+      const sources = getAllStickerSources(m);
+      const out = {};
+
+      for (const [label, sticker] of Object.entries(sources)) {
+        out[label] = {
+          fileEncSha256: toHex(sticker.fileEncSha256) || null,
+          fileSha256:    toHex(sticker.fileSha256)    || null,
+          mediaKey:      toHex(sticker.mediaKey)      || null,
+          url:           sticker.url                  || null,
+        };
+      }
+
+      // Also log m.quoted keys
+      out['_m.quoted_keys']   = m.quoted ? Object.keys(m.quoted) : null;
+      out['_m.quoted.mtype']  = m.quoted?.mtype || null;
+      out['_m.key.id']        = m.key?.id || null;
+
+      // Save to file for inspection
+      fs.writeFileSync(DEBUG_FILE, JSON.stringify(out, null, 2));
+
+      let txt = `*BOND DEBUG*\n\n`;
+      for (const [label, data] of Object.entries(out)) {
+        txt += `*${label}*\n`;
+        if (data && typeof data === 'object') {
+          for (const [k, v] of Object.entries(data)) {
+            txt += `  _${k}: ${v ? v.slice(0, 20) + '...' : 'null'}_\n`;
+          }
+        } else {
+          txt += `  _${JSON.stringify(data)}_\n`;
+        }
+        txt += '\n';
+      }
+      txt += `_full debug saved to database/bond_debug.json_`;
+      return reply(txt);
+    }
+
+    // ── .bond <command> ────────────────────────────────────────────
     if (command === 'bond') {
       if (!text) return reply(
         `_reply to a sticker:_\n*.bond <command>*\n_example:_ *.bond ping*`
       );
 
-      const stickerMsg = getQuotedStickerMsg(m);
-      if (!stickerMsg) return reply('_reply to a sticker_');
+      const sources = getAllStickerSources(m);
+      if (Object.keys(sources).length === 0) return reply('_reply to a sticker_');
 
-      const hash = getStickerHash(stickerMsg);
-      if (!hash) return reply('_could not read sticker hash — forward a fresh copy of the sticker_');
+      // Try each source for a valid hash
+      let hash = null;
+      let usedSource = null;
+      for (const [label, sticker] of Object.entries(sources)) {
+        const h = extractHash(sticker);
+        if (h) { hash = h; usedSource = label; break; }
+      }
+
+      if (!hash) return reply('_sticker found but could not read hash — use .bonddebug to inspect_');
 
       let targetCmd = text.trim();
       const allPfx = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
@@ -89,9 +143,10 @@ module.exports = {
       if (global.pluginLoader) global.pluginLoader.reload();
 
       await sock.sendMessage(m.chat, { react: { text: '✅', key: m.key } }).catch(() => {});
-      return reply(`_bonded ✅ — send that sticker to trigger_ *${prefix}${targetCmd}*`);
+      return reply(`_bonded ✅ via ${usedSource}_\n_send that sticker to trigger_ *${prefix}${targetCmd}*`);
     }
 
+    // ── .unbond ────────────────────────────────────────────────────
     if (command === 'unbond') {
       if (args[0]?.toLowerCase() === 'all') {
         writeBonds({});
@@ -101,19 +156,23 @@ module.exports = {
 
       const bonds = readBonds();
 
-      // Method 1: reply to the bonded sticker
-      const stickerMsg = getQuotedStickerMsg(m);
-      if (stickerMsg) {
-        const hash = getStickerHash(stickerMsg);
-        if (!hash || !bonds[hash]) return reply('_sticker not bonded_');
-        const removed = bonds[hash];
-        delete bonds[hash];
-        writeBonds(bonds);
-        if (global.pluginLoader) global.pluginLoader.reload();
-        return reply(`_unbonded_ *${prefix}${removed}*`);
+      const sources = getAllStickerSources(m);
+      if (Object.keys(sources).length > 0) {
+        let hash = null;
+        for (const [, sticker] of Object.entries(sources)) {
+          const h = extractHash(sticker);
+          if (h) { hash = h; break; }
+        }
+        if (hash) {
+          if (!bonds[hash]) return reply('_sticker not bonded_');
+          const removed = bonds[hash];
+          delete bonds[hash];
+          writeBonds(bonds);
+          if (global.pluginLoader) global.pluginLoader.reload();
+          return reply(`_unbonded_ *${prefix}${removed}*`);
+        }
       }
 
-      // Method 2: .unbond <commandname>
       if (args[0]) {
         let targetCmd = args[0].trim();
         const allPfx = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
@@ -131,19 +190,21 @@ module.exports = {
       return reply(`_reply to bonded sticker OR:_\n*.unbond <command>*\n*.unbond all*`);
     }
 
+    // ── .unbondall ─────────────────────────────────────────────────
     if (command === 'unbondall') {
       writeBonds({});
       if (global.pluginLoader) global.pluginLoader.reload();
       return reply('_all bonds cleared ✅_');
     }
 
+    // ── .listbond ──────────────────────────────────────────────────
     if (command === 'listbond') {
       const bonds   = readBonds();
       const entries = Object.entries(bonds);
       if (!entries.length) return reply('_no bonded stickers_');
       let txt = `*BONDED STICKERS*\n_Total: ${entries.length}_\n\n`;
-      entries.forEach(([, cmd], i) => {
-        txt += `${String(i + 1).padStart(2, '0')}. _${prefix}${cmd}_\n`;
+      entries.forEach(([hash, cmd], i) => {
+        txt += `${String(i + 1).padStart(2, '0')}. _${prefix}${cmd}_ \`${hash.slice(0, 8)}...\`\n`;
       });
       return reply(txt);
     }
