@@ -27,12 +27,9 @@ function toHex(raw) {
 
 function extractHash(sm) {
   if (!sm) return null;
-  return (
-    toHex(sm.fileEncSha256) ||
-    toHex(sm.fileSha256)    ||
-    toHex(sm.mediaKey)      ||
-    null
-  );
+  // fileSha256 = content hash, stable across re-sends and forwards
+  // fileEncSha256 and mediaKey change every time WhatsApp re-encrypts
+  return toHex(sm.fileSha256) || null;
 }
 
 // Pull the quoted stickerMessage object from every possible Baileys path
