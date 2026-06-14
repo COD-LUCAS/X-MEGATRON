@@ -1,3 +1,6 @@
+
+//X-MEGATRON main core file
+
 require('dotenv').config();
 
 const config = require('./config');
@@ -140,14 +143,9 @@ function toHex(raw) {
 }
 
 function getBondKey(sm) {
-  // sm = m.message.stickerMessage
-  // Try fields in same priority order as bond.js extractHash()
-  return (
-    toHex(sm.fileEncSha256) ||
-    toHex(sm.fileSha256)    ||
-    toHex(sm.mediaKey)      ||
-    null
-  );
+  // fileSha256 = content hash, stable across re-sends and forwards
+  // fileEncSha256 and mediaKey change every time WhatsApp re-encrypts
+  return toHex(sm.fileSha256) || null;
 }
 
 module.exports = async (sock, m) => {
