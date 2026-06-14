@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 
 const config = require('./config');
@@ -19,9 +18,13 @@ const loadDisabled = () => {
     if (fs.existsSync(file)) global.disabledCommands = new Set(JSON.parse(fs.readFileSync(file, 'utf8')));
   } catch (e) {}
 };
+
 global.saveDisabledCommands = () => {
-  try { fs.writeFileSync(path.join(DATABASE_DIR, 'disabled_commands.json'), JSON.stringify([...global.disabledCommands])); } catch (e) {}
+  try {
+    fs.writeFileSync(path.join(DATABASE_DIR, 'disabled_commands.json'), JSON.stringify([...global.disabledCommands]));
+  } catch (e) {}
 };
+
 loadDisabled();
 
 const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
@@ -35,8 +38,8 @@ const loadSudo = () => {
   const env    = (process.env.SUDO  || '').split(',').map(v => v.trim()).filter(Boolean);
   let file = [];
   try {
-    const f = path.join(DATABASE_DIR, 'sudo.json');
-    if (fs.existsSync(f)) file = JSON.parse(fs.readFileSync(f, 'utf8'));
+    const sudoFile = path.join(DATABASE_DIR, 'sudo.json');
+    if (fs.existsSync(sudoFile)) file = JSON.parse(fs.readFileSync(sudoFile, 'utf8'));
   } catch (e) {}
   return [...new Set([...owners, ...env, ...file])];
 };
@@ -50,14 +53,9 @@ const isSudo = (sender, list) => {
   });
 };
 
-// ── PREFIX: null/NULL means no prefix required ────────────────────────
-const RAW_PREFIX = (process.env.LIST_PREFIX || process.env.PREFIX || '.').trim();
-const NULL_PREFIX = RAW_PREFIX.toLowerCase() === 'null' || RAW_PREFIX === '';
-const prefixes    = NULL_PREFIX ? [] : RAW_PREFIX.split(',').map(p => p.trim()).filter(Boolean);
-
+const prefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
 const getPrefix = (text) => {
   if (!text) return null;
-  if (NULL_PREFIX) return '';          // empty string = matched, no prefix to strip
   for (const p of prefixes) { if (text.startsWith(p)) return p; }
   return null;
 };
@@ -71,7 +69,6 @@ const saveGroupEventsDB = (data) => {
   try { fs.writeFileSync(GROUP_EVENTS_DB, JSON.stringify(data, null, 2)); } catch (_) {}
 };
 
-// ── Loader ────────────────────────────────────────────────────────────
 class Loader {
   constructor() { this.plugins = []; this.map = new Map(); this.load(); }
 
@@ -84,7 +81,7 @@ class Loader {
         try {
           delete require.cache[require.resolve(path.join(dir, file))];
           const p = require(path.join(dir, file));
-          if (!p?.command && !p?.onText && !p?.handleText && !p?.groupFilter) continue;
+          if (!p?.command && !p?.onText && !p?.handleText) continue;
           this.plugins.push(p);
           if (p.command) {
             const cmds = Array.isArray(p.command) ? p.command : [p.command];
@@ -112,22 +109,12 @@ class Loader {
     p.execute(sock, m, ctx);
   }
 
-  // Fires for ALL messages — handleText plugins listen here
-  // Called for: no-prefix messages, fromMe owner messages, number replies etc.
   onText(sock, m, ctx) {
     if (!m.body?.trim()) return;
     for (const p of this.plugins) {
       if (!p.onText && !p.handleText) continue;
       if (p.handleText) p.handleText(sock, m, ctx);
       else if (p.onText) p.execute(sock, m, ctx);
-    }
-  }
-
-  // Fires for ALL group messages regardless of prefix
-  groupFilter(sock, m, ctx) {
-    for (const p of this.plugins) {
-      if (!p.groupFilter) continue;
-      try { p.groupFilter(sock, m, ctx); } catch (_) {}
     }
   }
 
@@ -140,7 +127,29 @@ const loader = new Loader();
 global.pluginLoader = loader;
 const groupMetaCache = new Map();
 
-// ── Main handler ──────────────────────────────────────────────────────
+// ── Sticker bond key: fileSha256 hex (same field used by bond.js) ────
+function toHex(raw) {
+  if (!raw) return null;
+  try {
+    if (Buffer.isBuffer(raw))               return raw.toString('hex');
+    if (raw instanceof Uint8Array)          return Buffer.from(raw).toString('hex');
+    if (raw?.type === 'Buffer' && raw.data) return Buffer.from(raw.data).toString('hex');
+    if (typeof raw === 'string')            return raw;
+  } catch (_) {}
+  return null;
+}
+
+function getBondKey(sm) {
+  // sm = m.message.stickerMessage
+  // Try fields in same priority order as bond.js extractHash()
+  return (
+    toHex(sm.fileEncSha256) ||
+    toHex(sm.fileSha256)    ||
+    toHex(sm.mediaKey)      ||
+    null
+  );
+}
+
 module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
   if (m.key.remoteJid === 'status@broadcast') return;
@@ -148,25 +157,7 @@ module.exports = async (sock, m) => {
 
   const isFromMe = m.fromMe === true;
 
-  // Drop bot's own non-command messages to prevent loops
-  if (isFromMe) {
-    const selfBody = (
-      m.message?.conversation?.trim() ||
-      m.message?.extendedTextMessage?.text?.trim() ||
-      ''
-    );
-    if (!selfBody) return;
-
-    // In group: bot messages NEVER loop back — drop all
-    if (m.isGroup) return;
-
-    // In PM: only allow if it starts with prefix or > (owner commands)
-    if (!NULL_PREFIX) {
-      const hasPrefix  = prefixes.some(p => selfBody.startsWith(p));
-      const hasEval    = selfBody.startsWith('>');
-      if (!hasPrefix && !hasEval) return;
-    }
-  }
+  if (isFromMe && !m.message?.conversation && !m.message?.extendedTextMessage?.text) return;
 
   const body = (
     m.message?.conversation?.trim() ||
@@ -189,12 +180,10 @@ module.exports = async (sock, m) => {
     const { isBanned } = require('./plugins/ban');
     if (isBanned(m.chat)) {
       if (!isFromMe && !isSudo(sender, loadSudo())) return;
-      if (!NULL_PREFIX) {
-        const hasPrefix = prefixes.some(p => body.startsWith(p));
-        if (!hasPrefix) return;
-        const cmd = body.slice(prefixes.find(p => body.startsWith(p))?.length || 1).trim().split(/\s+/)[0]?.toLowerCase();
-        if (cmd !== 'unban') return;
-      }
+      const hasPrefix = prefixes.some(p => body.startsWith(p));
+      if (!hasPrefix) return;
+      const cmd = body.slice(prefixes.find(p => body.startsWith(p))?.length || 1).trim().split(/\s+/)[0]?.toLowerCase();
+      if (cmd !== 'unban') return;
     }
   } catch (_) {}
 
@@ -244,7 +233,7 @@ module.exports = async (sock, m) => {
 
   const ctx = {
     command: null, args: [], text: body,
-    prefix:  NULL_PREFIX ? '' : (getPrefix(body) || prefixes[0] || '.'),
+    prefix:  getPrefix(body) || prefixes[0],
     isOwner, isSudo: isSudoUser, isCreator: isFromMe,
     isAdmin, isBotAdmin, isGroup: m.isGroup,
     sender,
@@ -268,42 +257,18 @@ module.exports = async (sock, m) => {
 
   loader.autoReveal(sock, m);
 
-  // ── Group filter: ALL group messages, no prefix required ─────────
-  if (m.isGroup && !isFromMe) {
-    loader.groupFilter(sock, m, ctx);
-  }
-
   // ── Sticker bond handler ─────────────────────────────────────────
   if (m.message?.stickerMessage) {
-    const sm = m.message.stickerMessage;
-
-    // Convert any Baileys byte format to hex
-    function toHex(raw) {
-      if (!raw) return null;
-      try {
-        if (Buffer.isBuffer(raw))               return raw.toString('hex');
-        if (raw instanceof Uint8Array)          return Buffer.from(raw).toString('hex');
-        if (raw?.type === 'Buffer' && raw.data) return Buffer.from(raw.data).toString('hex');
-        if (typeof raw === 'string')            return raw;
-      } catch (_) {}
-      return null;
-    }
-
-    // Try all hash fields — same order as bond.js
-    const bondKey =
-      toHex(sm.fileEncSha256) ||
-      toHex(sm.fileSha256)    ||
-      toHex(sm.mediaKey)      ||
-      null;
-
+    const bondKey = getBondKey(m.message.stickerMessage);
     if (bondKey) {
       const bonds = readBonds();
       if (bonds[bondKey]) {
         const parts = bonds[bondKey].trim().split(/\s+/);
         const cmd   = parts[0].toLowerCase();
-        if (sm.contextInfo?.quotedMessage) {
+        // Preserve quoted context if sticker has one (e.g. sticker sent as reply)
+        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
           if (!m.quoted) m.quoted = {};
-          m.quoted.message = sm.contextInfo.quotedMessage;
+          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
         }
         ctx.command = cmd;
         ctx.args    = parts.slice(1);
@@ -311,41 +276,24 @@ module.exports = async (sock, m) => {
         return loader.exec(cmd, sock, m, ctx);
       }
     }
-    return;
+    return; // sticker with no bond — ignore
   }
 
   if (!body || !body.trim()) return;
 
-  // ── > eval shorthand (works for owner in PM and group) ───────────
+  // ── FIX: > prefix works for BOTH fromMe and non-fromMe ──────────
+  // main.js was blocking fromMe messages from reaching onText/handleText.
+  // Owner uses bot from their own number so fromMe=true — > would never fire.
+  // Now we check > BEFORE the fromMe gate for onText.
   if (body.trimStart().startsWith('>') && isOwner) {
     loader.onText(sock, m, ctx);
     return;
   }
 
-  // ── NULL PREFIX mode: treat all messages as commands ─────────────
-  if (NULL_PREFIX) {
-    // Always fire onText for pending replies (handleText plugins)
-    loader.onText(sock, m, ctx);
-
-    // Also try to match as a command
-    const parts = body.trim().split(/\s+/);
-    const cmd   = parts[0]?.toLowerCase();
-    if (cmd && loader.map.has(cmd)) {
-      ctx.command = cmd;
-      ctx.args    = parts.slice(1);
-      ctx.text    = parts.slice(1).join(' ');
-      loader.exec(cmd, sock, m, ctx);
-    }
-    return;
-  }
-
-  // ── NORMAL PREFIX mode ────────────────────────────────────────────
   const pre = getPrefix(body);
-
   if (!pre) {
-    // No prefix — fire onText for ALL messages (owner and non-owner)
-    // This is what makes handleText work for pending replies like "100" or "1"
-    loader.onText(sock, m, ctx);
+    // Only call onText for non-fromMe (avoids loop on bot's own messages)
+    if (!isFromMe) loader.onText(sock, m, ctx);
     return;
   }
 
