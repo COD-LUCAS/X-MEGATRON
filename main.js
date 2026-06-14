@@ -186,30 +186,10 @@ module.exports = async (sock, m) => {
   const isOwner    = isFromMe || isSudo(sender, sudoList);
   const isSudoUser = !isFromMe && isSudo(sender, sudoList);
 
-  // ── Sticker bond handler ─────────────────────────────────────────
-  if (m.message?.stickerMessage) {
-    const bondKey = getBondKey(m.message.stickerMessage);
-    if (bondKey) {
-      const bonds = readBonds();
-      if (bonds[bondKey]) {
-        const parts = bonds[bondKey].trim().split(/\s+/);
-        const cmd   = parts[0].toLowerCase();
-        // Preserve quoted context if sticker has one (e.g. sticker sent as reply)
-        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
-          if (!m.quoted) m.quoted = {};
-          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
-        }
-        ctx.command = cmd;
-        ctx.args    = parts.slice(1);
-        ctx.text    = parts.slice(1).join(' ');
-        return loader.exec(cmd, sock, m, ctx);
-      }
-    }
-    return; // sticker with no bond — ignore
-  }
-
   const mode = (process.env.MODE || 'public').toLowerCase();
-  if (!isFromMe) {
+  const isStickerMsg = !!m.message?.stickerMessage;
+  if (!isFromMe && !isStickerMsg) {
+    // Stickers bypass mode check — bonded stickers work for everyone
     if (mode === 'private' && !isOwner) return;
     if (mode === 'group'   && !m.isGroup && !isOwner) return;
     if (mode === 'pm'      && m.isGroup  && !isOwner) return;
@@ -273,6 +253,32 @@ module.exports = async (sock, m) => {
   };
 
   loader.autoReveal(sock, m);
+
+  // ── Sticker bond handler — after ctx, works for ALL users ────────
+  if (m.message?.stickerMessage) {
+    const bondKey = getBondKey(m.message.stickerMessage);
+    if (bondKey) {
+      const bonds = readBonds();
+      if (bonds[bondKey]) {
+        const parts = bonds[bondKey].trim().split(/\s+/);
+        const cmd   = parts[0].toLowerCase();
+        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
+          if (!m.quoted) m.quoted = {};
+          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
+        }
+        ctx.command = cmd;
+        ctx.args    = parts.slice(1);
+        ctx.text    = parts.slice(1).join(' ');
+        // Bypass owner/sudo/admin checks for bonded sticker commands
+        const plugin = loader.map.get(cmd);
+        if (plugin && typeof plugin.execute === 'function') {
+          return plugin.execute(sock, m, ctx);
+        }
+        return;
+      }
+    }
+    return; // sticker with no bond — ignore
+  }
 
   if (!body || !body.trim()) return;
 
