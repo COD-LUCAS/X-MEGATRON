@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 
 const config = require('./config');
@@ -274,18 +275,26 @@ module.exports = async (sock, m) => {
 
   // ── Sticker bond handler ─────────────────────────────────────────
   if (m.message?.stickerMessage) {
-    const sm  = m.message.stickerMessage;
-    // Use fileEncSha256 — same hash for same sticker regardless of sender/time
-    const raw = sm.fileEncSha256 || sm.fileSha256;
-    let bondKey = null;
-    if (raw) {
+    const sm = m.message.stickerMessage;
+
+    // Convert any Baileys byte format to hex
+    function toHex(raw) {
+      if (!raw) return null;
       try {
-        if (Buffer.isBuffer(raw))               bondKey = raw.toString('hex');
-        else if (raw instanceof Uint8Array)     bondKey = Buffer.from(raw).toString('hex');
-        else if (raw?.type === 'Buffer' && raw.data) bondKey = Buffer.from(raw.data).toString('hex');
-        else if (typeof raw === 'string')       bondKey = raw;
+        if (Buffer.isBuffer(raw))               return raw.toString('hex');
+        if (raw instanceof Uint8Array)          return Buffer.from(raw).toString('hex');
+        if (raw?.type === 'Buffer' && raw.data) return Buffer.from(raw.data).toString('hex');
+        if (typeof raw === 'string')            return raw;
       } catch (_) {}
+      return null;
     }
+
+    // Try all hash fields — same order as bond.js
+    const bondKey =
+      toHex(sm.fileEncSha256) ||
+      toHex(sm.fileSha256)    ||
+      toHex(sm.mediaKey)      ||
+      null;
 
     if (bondKey) {
       const bonds = readBonds();
