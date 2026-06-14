@@ -18,13 +18,9 @@ const loadDisabled = () => {
     if (fs.existsSync(file)) global.disabledCommands = new Set(JSON.parse(fs.readFileSync(file, 'utf8')));
   } catch (e) {}
 };
-
 global.saveDisabledCommands = () => {
-  try {
-    fs.writeFileSync(path.join(DATABASE_DIR, 'disabled_commands.json'), JSON.stringify([...global.disabledCommands]));
-  } catch (e) {}
+  try { fs.writeFileSync(path.join(DATABASE_DIR, 'disabled_commands.json'), JSON.stringify([...global.disabledCommands])); } catch (e) {}
 };
-
 loadDisabled();
 
 const BOND_FILE = path.join(DATABASE_DIR, 'sticker_bonds.json');
@@ -38,8 +34,8 @@ const loadSudo = () => {
   const env    = (process.env.SUDO  || '').split(',').map(v => v.trim()).filter(Boolean);
   let file = [];
   try {
-    const sudoFile = path.join(DATABASE_DIR, 'sudo.json');
-    if (fs.existsSync(sudoFile)) file = JSON.parse(fs.readFileSync(sudoFile, 'utf8'));
+    const f = path.join(DATABASE_DIR, 'sudo.json');
+    if (fs.existsSync(f)) file = JSON.parse(fs.readFileSync(f, 'utf8'));
   } catch (e) {}
   return [...new Set([...owners, ...env, ...file])];
 };
@@ -69,6 +65,28 @@ const saveGroupEventsDB = (data) => {
   try { fs.writeFileSync(GROUP_EVENTS_DB, JSON.stringify(data, null, 2)); } catch (_) {}
 };
 
+// ── Sticker hash — must match exactly what bond.js saves ─────────────
+function toHex(raw) {
+  if (!raw) return null;
+  try {
+    if (Buffer.isBuffer(raw))               return raw.toString('hex');
+    if (raw instanceof Uint8Array)          return Buffer.from(raw).toString('hex');
+    if (raw?.type === 'Buffer' && raw.data) return Buffer.from(raw.data).toString('hex');
+    if (typeof raw === 'string')            return raw;
+  } catch (_) {}
+  return null;
+}
+
+function getBondKey(sm) {
+  // Try all three fields — bond.js tries in same order
+  return (
+    toHex(sm.fileEncSha256) ||
+    toHex(sm.fileSha256)    ||
+    toHex(sm.mediaKey)      ||
+    null
+  );
+}
+
 class Loader {
   constructor() { this.plugins = []; this.map = new Map(); this.load(); }
 
@@ -81,7 +99,7 @@ class Loader {
         try {
           delete require.cache[require.resolve(path.join(dir, file))];
           const p = require(path.join(dir, file));
-          if (!p?.command && !p?.onText && !p?.handleText) continue;
+          if (!p?.command && !p?.onText && !p?.handleText && !p?.groupFilter) continue;
           this.plugins.push(p);
           if (p.command) {
             const cmds = Array.isArray(p.command) ? p.command : [p.command];
@@ -109,12 +127,22 @@ class Loader {
     p.execute(sock, m, ctx);
   }
 
+  // ── FIX: onText fires for ALL messages — fromMe and non-fromMe ───
+  // This is what makes number replies (1, 100) work from owner's device
+  // Plugins using handleText (spotify, fancychecker) rely on this
   onText(sock, m, ctx) {
     if (!m.body?.trim()) return;
     for (const p of this.plugins) {
       if (!p.onText && !p.handleText) continue;
       if (p.handleText) p.handleText(sock, m, ctx);
       else if (p.onText) p.execute(sock, m, ctx);
+    }
+  }
+
+  groupFilter(sock, m, ctx) {
+    for (const p of this.plugins) {
+      if (!p.groupFilter) continue;
+      try { p.groupFilter(sock, m, ctx); } catch (_) {}
     }
   }
 
@@ -127,24 +155,6 @@ const loader = new Loader();
 global.pluginLoader = loader;
 const groupMetaCache = new Map();
 
-// ── Sticker bond key: fileSha256 hex (same field used by bond.js) ────
-function toHex(raw) {
-  if (!raw) return null;
-  try {
-    if (Buffer.isBuffer(raw))               return raw.toString('hex');
-    if (raw instanceof Uint8Array)          return Buffer.from(raw).toString('hex');
-    if (raw?.type === 'Buffer' && raw.data) return Buffer.from(raw.data).toString('hex');
-    if (typeof raw === 'string')            return raw;
-  } catch (_) {}
-  return null;
-}
-
-function getBondKey(sm) {
-  // fileSha256 = content hash, stable across re-sends and forwards
-  // fileEncSha256 and mediaKey change every time WhatsApp re-encrypts
-  return toHex(sm.fileSha256) || null;
-}
-
 module.exports = async (sock, m) => {
   if (!m?.key?.id || !m.message) return;
   if (m.key.remoteJid === 'status@broadcast') return;
@@ -152,7 +162,21 @@ module.exports = async (sock, m) => {
 
   const isFromMe = m.fromMe === true;
 
-  if (isFromMe && !m.message?.conversation && !m.message?.extendedTextMessage?.text && !m.message?.stickerMessage) return;
+  // Drop bot-generated empty messages (warnings/media sent by bot)
+  // Stickers are allowed through — bond trigger from owner's device
+  if (isFromMe && !m.message?.stickerMessage) {
+    const selfBody = (
+      m.message?.conversation?.trim() ||
+      m.message?.extendedTextMessage?.text?.trim() ||
+      ''
+    );
+    if (!selfBody) return;
+    // If it has no prefix, no eval, and is not a number reply — it's a bot response, drop it
+    const hasPrefix  = prefixes.some(p => selfBody.startsWith(p));
+    const hasEval    = selfBody.trimStart().startsWith('>');
+    const isNumber   = /^\d+$/.test(selfBody);
+    if (!hasPrefix && !hasEval && !isNumber) return;
+  }
 
   const body = (
     m.message?.conversation?.trim() ||
@@ -187,9 +211,7 @@ module.exports = async (sock, m) => {
   const isSudoUser = !isFromMe && isSudo(sender, sudoList);
 
   const mode = (process.env.MODE || 'public').toLowerCase();
-  const isStickerMsg = !!m.message?.stickerMessage;
-  if (!isFromMe && !isStickerMsg) {
-    // Stickers bypass mode check — bonded stickers work for everyone
+  if (!isFromMe) {
     if (mode === 'private' && !isOwner) return;
     if (mode === 'group'   && !m.isGroup && !isOwner) return;
     if (mode === 'pm'      && m.isGroup  && !isOwner) return;
@@ -254,47 +276,52 @@ module.exports = async (sock, m) => {
 
   loader.autoReveal(sock, m);
 
-  // ── Sticker bond handler — after ctx, works for ALL users ────────
+  // ── Group filter: ALL group messages ─────────────────────────────
+  if (m.isGroup && !isFromMe) {
+    loader.groupFilter(sock, m, ctx);
+  }
+
+  // ── Sticker bond handler ─────────────────────────────────────────
   if (m.message?.stickerMessage) {
-    const bondKey = getBondKey(m.message.stickerMessage);
+    const sm      = m.message.stickerMessage;
+    const bondKey = getBondKey(sm);
+
     if (bondKey) {
       const bonds = readBonds();
       if (bonds[bondKey]) {
         const parts = bonds[bondKey].trim().split(/\s+/);
         const cmd   = parts[0].toLowerCase();
-        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
+        if (sm.contextInfo?.quotedMessage) {
           if (!m.quoted) m.quoted = {};
-          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
+          m.quoted.message = sm.contextInfo.quotedMessage;
         }
         ctx.command = cmd;
         ctx.args    = parts.slice(1);
         ctx.text    = parts.slice(1).join(' ');
-        // Bypass owner/sudo/admin checks for bonded sticker commands
+        // Call plugin directly — bypass owner/admin checks for bonded stickers
         const plugin = loader.map.get(cmd);
-        if (plugin && typeof plugin.execute === 'function') {
-          return plugin.execute(sock, m, ctx);
-        }
+        if (plugin?.execute) return plugin.execute(sock, m, ctx);
         return;
       }
     }
-    return; // sticker with no bond — ignore
+    return;
   }
 
   if (!body || !body.trim()) return;
 
-  // ── FIX: > prefix works for BOTH fromMe and non-fromMe ──────────
-  // main.js was blocking fromMe messages from reaching onText/handleText.
-  // Owner uses bot from their own number so fromMe=true — > would never fire.
-  // Now we check > BEFORE the fromMe gate for onText.
+  // ── > eval: works for owner regardless of fromMe ─────────────────
   if (body.trimStart().startsWith('>') && isOwner) {
     loader.onText(sock, m, ctx);
     return;
   }
 
   const pre = getPrefix(body);
+
   if (!pre) {
-    // Only call onText for non-fromMe (avoids loop on bot's own messages)
-    if (!isFromMe) loader.onText(sock, m, ctx);
+    // ── FIX: onText fires for EVERYONE including fromMe owner ──────
+    // This is what makes "1", "100" replies work from owner's own number
+    // spotify.handleText and fancychecker.handleText both need this
+    loader.onText(sock, m, ctx);
     return;
   }
 
