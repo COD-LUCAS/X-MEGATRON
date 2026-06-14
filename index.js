@@ -1,12 +1,12 @@
 require('./library/console');
 require('dotenv').config();
 
-const fs = require('fs');
-const path = require('path');
+const fs    = require('fs');
+const path  = require('path');
 const axios = require('axios');
-const log = require('./library/console');
+const log   = require('./library/console');
 
-process.on('uncaughtException', (e) => log.error('UncaughtException: ' + e.message));
+process.on('uncaughtException',  (e) => log.error('UncaughtException: '  + e.message));
 process.on('unhandledRejection', (e) => log.error('UnhandledRejection: ' + (e?.message || e)));
 
 try {
@@ -26,8 +26,8 @@ try {
 const customTemp = path.join(process.cwd(), 'temp');
 if (!fs.existsSync(customTemp)) fs.mkdirSync(customTemp, { recursive: true });
 process.env.TMPDIR = customTemp;
-process.env.TEMP = customTemp;
-process.env.TMP = customTemp;
+process.env.TEMP   = customTemp;
+process.env.TMP    = customTemp;
 
 setInterval(() => {
   fs.readdir(customTemp, (err, files) => {
@@ -96,31 +96,29 @@ let makeWASocket, useMultiFileAuthState, DisconnectReason,
 
 const loadBaileys = async () => {
   const B = await import('@itsliaaa/baileys');
-  makeWASocket = B.default;
-  useMultiFileAuthState = B.useMultiFileAuthState;
-  DisconnectReason = B.DisconnectReason;
+  makeWASocket              = B.default;
+  useMultiFileAuthState     = B.useMultiFileAuthState;
+  DisconnectReason          = B.DisconnectReason;
   fetchLatestBaileysVersion = B.fetchLatestBaileysVersion;
-  Browsers = B.Browsers;
-  jidDecode = B.jidDecode;
+  Browsers                  = B.Browsers;
+  jidDecode                 = B.jidDecode;
 };
 
-const GROUP_EVENTS_DB = path.join(__dirname, 'database', 'group_events.json');
+const GROUP_EVENTS_DB   = path.join(__dirname, 'database', 'group_events.json');
 const loadGroupEventsDB = () => {
-  try {
-    if (fs.existsSync(GROUP_EVENTS_DB)) return JSON.parse(fs.readFileSync(GROUP_EVENTS_DB, 'utf8'));
-  } catch (_) {}
+  try { if (fs.existsSync(GROUP_EVENTS_DB)) return JSON.parse(fs.readFileSync(GROUP_EVENTS_DB, 'utf8')); } catch (_) {}
   return {};
 };
 
 const start = async () => {
   await loadBaileys();
 
-  const cfg = require('./config');
+  const cfg        = require('./config');
   const sessionDir = path.join(__dirname, cfg.session || 'sessions');
   await initSession(sessionDir);
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-  const { version } = await fetchLatestBaileysVersion();
+  const { version }          = await fetchLatestBaileysVersion();
   log.info(`Baileys ${version.join('.')}`);
 
   const sock = makeWASocket({
@@ -153,7 +151,7 @@ const start = async () => {
       if (!db.__global?.anticall) return;
       for (const call of calls) {
         if (call.status !== 'offer') continue;
-        const wl = (db.__global.callWhitelist || '').split(',').filter(Boolean);
+        const wl  = (db.__global.callWhitelist || '').split(',').filter(Boolean);
         const num = call.from?.split('@')[0] || '';
         if (wl.some(n => num.endsWith(n.replace(/\D/g, '').slice(-10)))) continue;
         try { if (typeof sock.rejectCall === 'function') await sock.rejectCall(call.id, call.from).catch(() => {}); } catch (_) {}
@@ -169,7 +167,7 @@ const start = async () => {
 
   sock.ev.on('group-participants.update', async ({ id, participants, action, author }) => {
     try {
-      const db = loadGroupEventsDB();
+      const db      = loadGroupEventsDB();
       const groupDb = db[id] || {};
       let groupName = id;
       try { const meta = await sock.groupMetadata(id); groupName = meta.subject || id; } catch (_) {}
@@ -177,9 +175,10 @@ const start = async () => {
       if (action === 'add' && groupDb.welcome?.enabled) {
         const template = groupDb.welcome.message || '{user} joined {group}';
         for (const jid of participants) {
-          const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
-          const user = jidStr.split('@')[0];
+          const jidStr   = typeof jid === 'string' ? jid : (jid.id || String(jid));
+          const user     = jidStr.split('@')[0];
           const finalMsg = '_' + template.replace(/{user}/g, `@${user}`).replace(/{group}/g, groupName) + '_';
+          if (!finalMsg || finalMsg.trim() === '__') continue;
           await sock.sendMessage(id, { text: finalMsg, mentions: [jidStr] }).catch(() => {});
         }
       }
@@ -187,9 +186,10 @@ const start = async () => {
       if ((action === 'remove' || action === 'leave') && groupDb.goodbye?.enabled) {
         const template = groupDb.goodbye.message || '{user} left {group}';
         for (const jid of participants) {
-          const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
-          const user = jidStr.split('@')[0];
+          const jidStr   = typeof jid === 'string' ? jid : (jid.id || String(jid));
+          const user     = jidStr.split('@')[0];
           const finalMsg = '_' + template.replace(/{user}/g, `@${user}`).replace(/{group}/g, groupName) + '_';
+          if (!finalMsg || finalMsg.trim() === '__') continue;
           await sock.sendMessage(id, { text: finalMsg, mentions: [jidStr] }).catch(() => {});
         }
       }
@@ -203,7 +203,7 @@ const start = async () => {
         if (gsDb[id]?.pdm) {
           const verb = action === 'promote' ? 'promoted as admin' : 'demoted as admin';
           for (const jid of participants) {
-            const jidStr = typeof jid === 'string' ? jid : (jid.id || String(jid));
+            const jidStr   = typeof jid === 'string' ? jid : (jid.id || String(jid));
             const mentions = [jidStr];
             if (author) mentions.push(author);
             const byText = author ? ` by @${author.split('@')[0]}` : '';
@@ -220,8 +220,17 @@ const start = async () => {
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
       log.success(`Connected as +${sock.user?.id?.split(':')[0]}`);
-      try { const upd = require('./plugins/updater'); if (upd.init) { const owners = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean); if (owners.length) upd.init(sock, owners); } } catch (_) {}
-      try { const sp = path.join(__dirname, 'plugins', 'startup.js'); if (fs.existsSync(sp)) require('./plugins/startup').execute(sock); } catch (_) {}
+      try {
+        const upd = require('./plugins/updater');
+        if (upd.init) {
+          const owners = (process.env.OWNER || '').split(',').map(v => v.trim()).filter(Boolean);
+          if (owners.length) upd.init(sock, owners);
+        }
+      } catch (_) {}
+      try {
+        const sp = path.join(__dirname, 'plugins', 'startup.js');
+        if (fs.existsSync(sp)) require('./plugins/startup').execute(sock);
+      } catch (_) {}
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
@@ -242,29 +251,38 @@ const start = async () => {
     if (raw.key?.id?.startsWith('BAE5') && raw.key.id.length === 16) return;
     if (raw.key.remoteJid === 'status@broadcast') return;
 
-    // ── Dedup ALL messages (including fromMe) by key.id ────────────
+    // Dedup by message ID
     if (seenIds.has(raw.key.id)) return;
     seenIds.add(raw.key.id);
     if (seenIds.size > 500) seenIds.delete(seenIds.values().next().value);
 
+    // ── fromMe filter ─────────────────────────────────────────────
+    // We need to let through:
+    //   1. Sticker messages (bond trigger from owner's device)
+    //   2. Commands with prefix (.ping, .menu etc)
+    //   3. Number replies (1, 2, 100) for handleText flows (spotify, fancychecker)
+    //   4. > eval shorthand
+    // We must BLOCK:
+    //   - Bot-generated responses (warnings, media sends etc) → causes null spam loops
     if (raw.key.fromMe) {
-      const selfBody = (
-        raw.message?.conversation?.trim() ||
-        raw.message?.extendedTextMessage?.text?.trim() ||
-        ''
-      );
-      const isSelfSticker = !!raw.message?.stickerMessage;
-      // Allow stickers through (for bond trigger from owner)
-      // Also allow: prefixed commands, eval (>), number replies (handleText flows)
-      if (!isSelfSticker) {
-        const prefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
-        const hasPrefix = prefixes.some(p => selfBody.startsWith(p));
-        const hasEval   = selfBody.startsWith('>');
-        const isNumber  = /^\d+$/.test(selfBody);
-        if (!selfBody || (!hasPrefix && !hasEval && !isNumber)) return;
+      const isSticker = !!raw.message?.stickerMessage;
+      if (!isSticker) {
+        const selfBody = (
+          raw.message?.conversation?.trim() ||
+          raw.message?.extendedTextMessage?.text?.trim() ||
+          ''
+        );
+        if (!selfBody) return; // empty bot message — drop
+
+        const cfgPrefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
+        const hasPrefix   = cfgPrefixes.some(p => selfBody.startsWith(p));
+        const hasEval     = selfBody.trimStart().startsWith('>');
+        const isNumber    = /^\d+$/.test(selfBody); // number reply for spotify/fancychecker
+
+        // Drop anything that isn't a command, eval, or number reply
+        if (!hasPrefix && !hasEval && !isNumber) return;
       }
     }
-
 
     if (raw.message.ephemeralMessage) {
       raw.message = raw.message.ephemeralMessage.message;
@@ -287,17 +305,15 @@ const start = async () => {
 
     const isMediaMsg = !!(
       raw.message.stickerMessage ||
-      raw.message.imageMessage ||
-      raw.message.videoMessage ||
-      raw.message.audioMessage ||
+      raw.message.imageMessage   ||
+      raw.message.videoMessage   ||
+      raw.message.audioMessage   ||
       raw.message.documentMessage
     );
 
     if (!isMediaMsg && !messageContent) return;
-    // NOTE: do NOT filter empty messageContent here — stickers and media have empty text but are valid
-    if (!isMediaMsg && (messageContent === '_' || messageContent === '*' || messageContent === '')) return;
 
-    // Rate limiting — non-owner messages only
+    // Rate limiting — non-bot messages only
     if (!raw.key.fromMe) {
       const rlKey = `${raw.key.participant || raw.key.remoteJid}::${raw.key.remoteJid}`;
       const now   = Date.now();
@@ -310,17 +326,10 @@ const start = async () => {
       const { smsg } = require('./library/manager');
       const m = smsg(sock, raw);
       if (!m) return;
-
-      if (m.isGroup && !m.fromMe) {
-      }
-
       await handler(sock, m);
     } catch (err) {
       log.error(`Error handling message: ${err.message}`);
     }
-  });
-
-  sock.ev.on('messages.update', (updates) => {
   });
 };
 
