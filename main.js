@@ -1,6 +1,3 @@
-
-//X-MEGATRON main core file
-
 require('dotenv').config();
 
 const config = require('./config');
@@ -155,7 +152,7 @@ module.exports = async (sock, m) => {
 
   const isFromMe = m.fromMe === true;
 
-  if (isFromMe && !m.message?.conversation && !m.message?.extendedTextMessage?.text) return;
+  if (isFromMe && !m.message?.conversation && !m.message?.extendedTextMessage?.text && !m.message?.stickerMessage) return;
 
   const body = (
     m.message?.conversation?.trim() ||
@@ -188,6 +185,28 @@ module.exports = async (sock, m) => {
   const sudoList   = loadSudo();
   const isOwner    = isFromMe || isSudo(sender, sudoList);
   const isSudoUser = !isFromMe && isSudo(sender, sudoList);
+
+  // ── Sticker bond handler ─────────────────────────────────────────
+  if (m.message?.stickerMessage) {
+    const bondKey = getBondKey(m.message.stickerMessage);
+    if (bondKey) {
+      const bonds = readBonds();
+      if (bonds[bondKey]) {
+        const parts = bonds[bondKey].trim().split(/\s+/);
+        const cmd   = parts[0].toLowerCase();
+        // Preserve quoted context if sticker has one (e.g. sticker sent as reply)
+        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
+          if (!m.quoted) m.quoted = {};
+          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
+        }
+        ctx.command = cmd;
+        ctx.args    = parts.slice(1);
+        ctx.text    = parts.slice(1).join(' ');
+        return loader.exec(cmd, sock, m, ctx);
+      }
+    }
+    return; // sticker with no bond — ignore
+  }
 
   const mode = (process.env.MODE || 'public').toLowerCase();
   if (!isFromMe) {
@@ -254,28 +273,6 @@ module.exports = async (sock, m) => {
   };
 
   loader.autoReveal(sock, m);
-
-  // ── Sticker bond handler ─────────────────────────────────────────
-  if (m.message?.stickerMessage) {
-    const bondKey = getBondKey(m.message.stickerMessage);
-    if (bondKey) {
-      const bonds = readBonds();
-      if (bonds[bondKey]) {
-        const parts = bonds[bondKey].trim().split(/\s+/);
-        const cmd   = parts[0].toLowerCase();
-        // Preserve quoted context if sticker has one (e.g. sticker sent as reply)
-        if (m.message.stickerMessage.contextInfo?.quotedMessage) {
-          if (!m.quoted) m.quoted = {};
-          m.quoted.message = m.message.stickerMessage.contextInfo.quotedMessage;
-        }
-        ctx.command = cmd;
-        ctx.args    = parts.slice(1);
-        ctx.text    = parts.slice(1).join(' ');
-        return loader.exec(cmd, sock, m, ctx);
-      }
-    }
-    return; // sticker with no bond — ignore
-  }
 
   if (!body || !body.trim()) return;
 
