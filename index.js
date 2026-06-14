@@ -231,7 +231,6 @@ const start = async () => {
     }
   });
 
-  const AF = require('./library/antifunction');
   const handler = require('./main');
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -243,23 +242,29 @@ const start = async () => {
     if (raw.key?.id?.startsWith('BAE5') && raw.key.id.length === 16) return;
     if (raw.key.remoteJid === 'status@broadcast') return;
 
+    // ── Dedup ALL messages (including fromMe) by key.id ────────────
+    if (seenIds.has(raw.key.id)) return;
+    seenIds.add(raw.key.id);
+    if (seenIds.size > 500) seenIds.delete(seenIds.values().next().value);
+
     if (raw.key.fromMe) {
       const selfBody = (
         raw.message?.conversation?.trim() ||
         raw.message?.extendedTextMessage?.text?.trim() ||
         ''
       );
-      const prefixes  = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
-      const hasPrefix  = prefixes.some(p => selfBody.startsWith(p));
-      const hasEval    = selfBody.startsWith('>');
-      const isNumber   = /^\d+$/.test(selfBody);
-      // Drop bot's own messages unless they are: a command, eval, or a number reply (for handleText flows)
-      if (!selfBody || (!hasPrefix && !hasEval && !isNumber)) return;
+      const isSelfSticker = !!raw.message?.stickerMessage;
+      // Allow stickers through (for bond trigger from owner)
+      // Also allow: prefixed commands, eval (>), number replies (handleText flows)
+      if (!isSelfSticker) {
+        const prefixes = (process.env.LIST_PREFIX || process.env.PREFIX || '.').split(',').map(p => p.trim());
+        const hasPrefix = prefixes.some(p => selfBody.startsWith(p));
+        const hasEval   = selfBody.startsWith('>');
+        const isNumber  = /^\d+$/.test(selfBody);
+        if (!selfBody || (!hasPrefix && !hasEval && !isNumber)) return;
+      }
     }
 
-    if (!raw.key.fromMe) {
-      AF.storeMessage(sock, raw).catch(() => {});
-    }
 
     if (raw.message.ephemeralMessage) {
       raw.message = raw.message.ephemeralMessage.message;
@@ -292,13 +297,10 @@ const start = async () => {
     // NOTE: do NOT filter empty messageContent here — stickers and media have empty text but are valid
     if (!isMediaMsg && (messageContent === '_' || messageContent === '*' || messageContent === '')) return;
 
+    // Rate limiting — non-owner messages only
     if (!raw.key.fromMe) {
-      if (seenIds.has(raw.key.id)) return;
-      seenIds.add(raw.key.id);
-      if (seenIds.size > 300) seenIds.delete(seenIds.values().next().value);
-
       const rlKey = `${raw.key.participant || raw.key.remoteJid}::${raw.key.remoteJid}`;
-      const now = Date.now();
+      const now   = Date.now();
       if (rateMap.has(rlKey) && now - rateMap.get(rlKey) < RATE_MS) return;
       rateMap.set(rlKey, now);
       if (rateMap.size > 500) rateMap.delete(rateMap.keys().next().value);
@@ -310,7 +312,6 @@ const start = async () => {
       if (!m) return;
 
       if (m.isGroup && !m.fromMe) {
-        AF.runGroupProtection(sock, m).catch(() => {});
       }
 
       await handler(sock, m);
@@ -320,7 +321,6 @@ const start = async () => {
   });
 
   sock.ev.on('messages.update', (updates) => {
-    AF.handleRevocation(sock, updates).catch(() => {});
   });
 };
 
