@@ -78,13 +78,8 @@ function toHex(raw) {
 }
 
 function getBondKey(sm) {
-  // Try all three fields — bond.js tries in same order
-  return (
-    toHex(sm.fileEncSha256) ||
-    toHex(sm.fileSha256)    ||
-    toHex(sm.mediaKey)      ||
-    null
-  );
+  // fileSha256 only — must match exactly what bond.js saves
+  return toHex(sm.fileSha256) || null;
 }
 
 class Loader {
