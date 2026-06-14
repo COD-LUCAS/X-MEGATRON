@@ -1,9 +1,3 @@
-/**
- * spotify.js — plugins/spotify.js
- * Commands: .sp <song name or spotify url>
- * Reply with a number after search to download.
- */
-
 'use strict';
 
 const axios = require('axios');
@@ -23,7 +17,6 @@ module.exports = {
   async execute(sock, m, ctx) {
     const { args, reply } = ctx;
 
-    // Input: args or quoted message text
     let query = args.join(' ').trim();
     if (!query && m.quoted?.text) query = m.quoted.text.trim();
     if (!query) return reply('_give me a song name or spotify url_');
@@ -62,11 +55,12 @@ module.exports = {
         `_results for: ${query}_\n\n${list}\n\n_reply with a number to download_`
       );
 
-      // Store pending state
-      pendingSpotify[m.sender] = { key: waitMsg.key, results };
+      // Store pending — key by chat+sender so it works in both PM and group
+      const stateKey = `${m.chat}::${m.sender}`;
+      pendingSpotify[stateKey] = { key: waitMsg.key, results };
 
       // Auto-clear after 2 minutes
-      setTimeout(() => { delete pendingSpotify[m.sender]; }, 2 * 60 * 1000);
+      setTimeout(() => { delete pendingSpotify[stateKey]; }, 2 * 60 * 1000);
 
     } catch (e) {
       console.error('Spotify search error:', e.message);
@@ -74,16 +68,22 @@ module.exports = {
     }
   },
 
-  // ── onText: handles number reply after search ────────────────
+  // ── handleText: handles number reply after search ─────────────
   async handleText(sock, m, ctx) {
-    const state = pendingSpotify[m.sender];
+    // Key by chat+sender to support both PM and group
+    const stateKey = `${m.chat}::${m.sender}`;
+    const state = pendingSpotify[stateKey];
     if (!state) return;
 
-    const num = parseInt((m.body || '').trim());
+    const body = (m.body || '').trim();
+    const num  = parseInt(body);
     if (isNaN(num) || num < 1 || num > state.results.length) return;
 
+    // Must be a plain number — ignore if it has other words
+    if (body !== String(num)) return;
+
     const track = state.results[num - 1];
-    delete pendingSpotify[m.sender];
+    delete pendingSpotify[stateKey];
 
     await downloadTrack(sock, m, track.spotifyUrl, state.key, track.trackName, track.artist);
   }
@@ -100,6 +100,8 @@ async function downloadTrack(sock, m, url, existingKey, trackName, artist) {
         text: '_fetching track info_'
       }, { quoted: m });
       msgKey = sent.key;
+    } else {
+      await editMsg(sock, m.chat, msgKey, '_fetching track info_');
     }
 
     const res = await axios.get(
@@ -111,9 +113,9 @@ async function downloadTrack(sock, m, url, existingKey, trackName, artist) {
       return await editMsg(sock, m.chat, msgKey, '_failed to get download link_');
     }
 
-    const dl    = res.data;
-    const title  = dl.title  || trackName || 'track';
-    const dlArtist = dl.artist || artist  || '';
+    const dl       = res.data;
+    const title    = dl.title  || trackName || 'track';
+    const dlArtist = dl.artist || artist    || '';
 
     await editMsg(sock, m.chat, msgKey, `_downloading: ${title} - ${dlArtist}_`);
 
@@ -133,22 +135,18 @@ async function downloadTrack(sock, m, url, existingKey, trackName, artist) {
       { quoted: m }
     );
 
-    await editMsg(sock, m.chat, msgKey, `_${title} - ${dlArtist}_`);
+    await editMsg(sock, m.chat, msgKey, `_✅ ${title} - ${dlArtist}_`);
 
   } catch (e) {
     console.error('Spotify download error:', e.message);
-    if (msgKey) await editMsg(sock, m.chat, msgKey, '_error downloading track_');
+    if (msgKey) await editMsg(sock, m.chat, msgKey, `_error: ${e.message}_`);
   }
 }
 
 async function editMsg(sock, chat, key, text) {
   try {
-    await sock.sendMessage(chat, {
-      text,
-      edit: key
-    });
+    await sock.sendMessage(chat, { text, edit: key });
   } catch {
-    // fallback if edit not supported
     await sock.sendMessage(chat, { text }).catch(() => {});
   }
 }
